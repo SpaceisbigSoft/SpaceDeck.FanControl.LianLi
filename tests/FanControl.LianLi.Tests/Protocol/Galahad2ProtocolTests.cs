@@ -5,7 +5,8 @@ namespace FanControl.LianLi.Tests.Protocol;
 
 /// <summary>
 /// Byte-level tests for the Galahad II AIO protocol: the set-fan and set-pump packets, the pump
-/// safety floor that prevents a stopped pump, the motherboard-sync flag, the big-endian
+/// safety floor that prevents a stopped pump, the motherboard-sync flag, the packet that hands the
+/// pump to the motherboard header, the big-endian
 /// fan/pump RPM handshake decode, and the Vision LCD's coolant temperature in the same reply.
 /// </summary>
 public sealed class Galahad2ProtocolTests {
@@ -35,6 +36,16 @@ public sealed class Galahad2ProtocolTests {
         Assert.Equal(0x8A, packet[1]);
         Assert.Equal((byte)expectedDuty, packet[7]);
         Assert.True(packet[7] >= Galahad2Protocol.PumpDutyFloor);
+    }
+
+    // Every byte of the follow-motherboard packet: report id, set pump, reserved, packet number,
+    // a 2-byte payload of source 1 (follow the motherboard PWM) and duty 100, then zeros to 64 bytes.
+    [Fact]
+    public void EncodeFollowMotherboardPump_IsSetPumpWithTheSourceOnTheMotherboardAtFullDuty() {
+        byte[] expected = new byte[64];
+        new byte[] { 0x01, 0x8A, 0x00, 0x00, 0x00, 0x02, 0x01, 0x64 }.CopyTo(expected, 0);
+
+        Assert.Equal(expected, Galahad2Protocol.EncodeFollowMotherboardPump());
     }
 
     [Fact]

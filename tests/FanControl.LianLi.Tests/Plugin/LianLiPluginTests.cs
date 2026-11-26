@@ -294,7 +294,7 @@ public class LianLiPluginTests {
     [Fact]
     public void InitializeThenLoad_RegistersTheCoolantTemperatureForAGalahadVision() {
         // A 0x7391 Galahad II Vision LCD is built as a Galahad, and its handshake reply also carries
-        // the coolant temperature, registered as a curve source beside the fan and pump.
+        // the coolant temperature, registered as a curve source beside the fan and pump speeds.
         var enumerator = new FakeEnumerator(GalahadVision()) {
             ConfigureTransport = (_, transport) => transport.ReplyFor = _ => CommandPacket.Build(0x81, 0x05, 0xA0, 0x0A, 0x6E, 0x01, 0x25, 0x08),
         };
@@ -304,8 +304,10 @@ public class LianLiPluginTests {
         var container = new FakeSensorsContainer();
         plugin.Load(container);
 
-        Assert.Equal(2, container.ControlSensors.Count);
-        Assert.Equal(2, container.FanSensors.Count);
+        // Its pump follows the motherboard header, so only the fan is a control; both speeds stay.
+        IPluginControlSensor fan = Assert.Single(container.ControlSensors);
+        Assert.Equal("LianLi/0/ch0/ctl", fan.Id);
+        Assert.Equal(new[] { "LianLi/0/ch0/fan", "LianLi/0/ch1/fan" }, container.FanSensors.Select(s => s.Id));
         IPluginSensor coolant = Assert.Single(container.TempSensors);
         Assert.Equal("LianLi/0/coolant/temp", coolant.Id);
         Assert.Equal("Lian Li Galahad #1 Coolant", coolant.Name);

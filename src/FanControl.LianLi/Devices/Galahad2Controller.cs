@@ -15,13 +15,23 @@ namespace FanControl.LianLi.Devices;
 /// keepalive write per channel, and an RPM poll that writes a handshake and reads to the answer. The
 /// pump duty is floored in <see cref="Galahad2Protocol"/> so a curve can never stop the pump. On a
 /// Galahad II Vision LCD the same answer carries the coolant temperature, published as an
-/// <see cref="ITemperatureSource"/>; every other cooler of the family reports no temperature.
+/// <see cref="ITemperatureSource"/>; every other cooler of the family reports no temperature. On a
+/// cooler whose pump follows the motherboard header (<see cref="Galahad2PumpSourceDecision"/>) the
+/// pump channel is not a control: the plugin keeps re-sending the command that hands the pump to the
+/// header, on the same schedule as a duty, and still reports the pump's RPM. Every speed reading is
+/// reported through <see cref="IFanSpeedSource"/>, under the channels' RPM identities, so the pump's
+/// stays when its control does not.
 /// </summary>
-internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
+internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanSpeedSource {
     private const int FanChannel = 0;
     private const int PumpChannel = 1;
     private const int Channels = 2;
     private const int CoolantTemperatures = 1;
+
+    // The pump target of a cooler whose pump follows the motherboard header: the duty the
+    // follow-motherboard command carries. It never changes, so the keepalive decision re-sends the
+    // command on its refresh interval, and a reconnect, which forgets the last write, re-sends it at once.
+    private const int MotherboardPumpTarget = 100;
 
     // The 0x0416 handshake reply is one 64-byte command-packet frame.
     private const int HandshakeReplyLength = 64;
@@ -42,6 +52,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
     private readonly int _index;
     private readonly IDeviceTransport _transport;
     private readonly bool _reportsCoolant;     // a Vision LCD, whose handshake reply carries the coolant
+    private readonly bool _pumpFollowsMotherboard; // the pump is handed to the motherboard header
     private readonly IClock _clock;
     private readonly ILog _log;
 
@@ -70,6 +81,11 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
         _index = index;
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _reportsCoolant = Galahad2Protocol.ReportsCoolant(productId);
+        _pumpFollowsMotherboard = Galahad2PumpSourceDecision.FollowsMotherboard(productId);
+        if (_pumpFollowsMotherboard) {
+            _target[PumpChannel] = MotherboardPumpTarget;
+        }
+
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _setUpGeneration = _transport.Generation;
@@ -81,9 +97,13 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
 
     /// <summary>
     /// The Galahad's two channels - fan and pump - are both physical parts of the AIO, so both are
-    /// always populated; there is nothing to hide.
+    /// populated, except that a pump which follows the motherboard header is not shown as a control:
+    /// FanControl drives it through the header's own control. Its RPM is still reported.
     /// </summary>
-    public bool IsChannelPopulated(int channel) => true;
+    public bool IsChannelPopulated(int channel) => !IsMotherboardPump(channel);
+
+    /// <summary>One speed reading per channel, the fan's and the pump's, whether or not the channel is a control.</summary>
+    public int FanSpeedCount => Channels;
 
     /// <summary>
     /// The sensor identity for a Galahad channel - fan (0) or pump (1). The ids share the stable
@@ -96,6 +116,15 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
             $"Lian Li Galahad #{_index + 1} {role}",
             $"LianLi/{_index}/ch{channel}/fan",
             $"Lian Li Galahad #{_index + 1} {role} RPM");
+    }
+
+    /// <summary>
+    /// The identity of a channel's speed reading: the channel's own RPM identity, so a reading keeps
+    /// the id and name it has always had.
+    /// </summary>
+    public FanSpeedDescriptor DescribeFanSpeed(int index) {
+        ChannelDescriptor channel = Describe(index);
+        return new FanSpeedDescriptor(channel.RpmId, channel.RpmName);
     }
 
     /// <summary>
@@ -119,15 +148,30 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
 
     // ---------- FanControl-thread methods (no I/O) ----------
 
-    /// <summary>Set the commanded duty for a channel. The worker pushes it to hardware.</summary>
+    /// <summary>
+    /// Set the commanded duty for a channel. The worker pushes it to hardware. A pump that follows
+    /// the motherboard header keeps following it: a duty for it (from a control remembered from a
+    /// build that had one) is ignored.
+    /// </summary>
     public void SetTarget(int channel, int duty) {
+        if (IsMotherboardPump(channel)) {
+            return;
+        }
+
         lock (_lock) {
             _target[channel] = duty;
         }
     }
 
-    /// <summary>Release a channel so the keepalive stops asserting it (used by Reset).</summary>
+    /// <summary>
+    /// Release a channel so the keepalive stops asserting it (used by Reset). A pump that follows the
+    /// motherboard header is never released, so the command that hands it to the header keeps going out.
+    /// </summary>
     public void ReleaseChannel(int channel) {
+        if (IsMotherboardPump(channel)) {
+            return;
+        }
+
         lock (_lock) {
             _target[channel] = -1;
         }
@@ -139,6 +183,9 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
             return _rpm[channel];
         }
     }
+
+    /// <inheritdoc />
+    public float? GetFanSpeed(int index) => GetRpm(index);
 
     /// <inheritdoc />
     public float? GetTemperature(int index) {
@@ -179,7 +226,10 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
             // Only the first speed after the controller is set up (at start or after a reconnect) is
             // logged, to show it is being driven. Each later change and the 15-second keepalive
             // re-send are not: a curve moves the speed hundreds of times a day.
-            if (lastWritten < 0) {
+            if (lastWritten < 0 && IsMotherboardPump(ch)) {
+                _log.Write(string.Format(
+                    CultureInfo.InvariantCulture, "Set G{0}:pump to follow the motherboard's PWM header", _index));
+            } else if (lastWritten < 0) {
                 _log.Write(string.Format(
                     CultureInfo.InvariantCulture,
                     "Set G{0}:{1} = {2}%",
@@ -329,12 +379,21 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource {
 
     private void WriteDuty(int channel, int duty) {
         // Fan and pump take distinct commands; the pump duty is floored inside the encoder so a
-        // FanControl curve can never command a stopped pump on an AIO.
-        byte[] command = channel == PumpChannel
-            ? Galahad2Protocol.EncodeSetPump(motherboardSync: false, dutyPercent: duty)
-            : Galahad2Protocol.EncodeSetFan(motherboardSync: false, dutyPercent: duty);
+        // FanControl curve can never command a stopped pump on an AIO. A pump that follows the
+        // motherboard header gets the command that hands it to the header instead of a duty.
+        byte[] command;
+        if (IsMotherboardPump(channel)) {
+            command = Galahad2Protocol.EncodeFollowMotherboardPump();
+        } else if (channel == PumpChannel) {
+            command = Galahad2Protocol.EncodeSetPump(motherboardSync: false, dutyPercent: duty);
+        } else {
+            command = Galahad2Protocol.EncodeSetFan(motherboardSync: false, dutyPercent: duty);
+        }
+
         _transport.Write(command);
     }
+
+    private bool IsMotherboardPump(int channel) => _pumpFollowsMotherboard && channel == PumpChannel;
 
     // Caller holds _lock. Mirrors FanController: cache plausible readings, keep the last good value
     // on a garbage read, and log each onset/recovery transition once.

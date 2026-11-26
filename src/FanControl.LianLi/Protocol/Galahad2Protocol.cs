@@ -66,6 +66,15 @@ internal static class Galahad2Protocol {
         return CommandPacket.Build(SetPumpCommand, Flag(motherboardSync), duty);
     }
 
+    /// <summary>
+    /// Encode the set-pump command that hands the pump to the motherboard's PWM header:
+    /// <c>01 8A 00 00 00 02 01 64</c>, then zeros. The source byte is 1, "follow the motherboard PWM"
+    /// (lian-li-linux <c>set_pump_speed_source</c>; the <c>sync</c> flag of <see cref="EncodeSetPump"/>,
+    /// which hands the Trinity's pump to the header in issue #30). The duty is 100%, so a cooler that
+    /// ignored the source byte would run its pump at full speed, never slow.
+    /// </summary>
+    public static byte[] EncodeFollowMotherboardPump() => EncodeSetPump(motherboardSync: true, dutyPercent: DutyMax);
+
     /// <summary>Encode the handshake request whose reply carries the fan and pump RPM.</summary>
     public static byte[] EncodeHandshakeRequest() => CommandPacket.Build(HandshakeCommand);
 

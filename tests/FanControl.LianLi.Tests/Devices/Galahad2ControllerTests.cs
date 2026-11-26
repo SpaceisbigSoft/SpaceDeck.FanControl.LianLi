@@ -524,4 +524,119 @@ public class Galahad2ControllerTests {
         Assert.Equal(1440f, controller.GetRpm(FanChannel));
         Assert.Equal(2670f, controller.GetRpm(PumpChannel));
     }
+
+    private static (Galahad2Controller controller, FakeDeviceTransport transport, FakeClock clock, FakeLogger logger) NewMotherboardPumpCooler() {
+        var transport = new FakeDeviceTransport();
+        var clock = new FakeClock();
+        var logger = new FakeLogger();
+        var controller = new Galahad2Controller(0, transport, 0x7395, clock, logger);
+        return (controller, transport, clock, logger);
+    }
+
+    // A Vision LCD's pump follows the motherboard header: the first tick after the cooler opens
+    // hands it over, with no control having set anything.
+    [Fact]
+    public void AVisionLcd_HandsThePumpToTheMotherboardHeader_OnTheFirstTick() {
+        var (controller, transport, _, logger) = NewMotherboardPumpCooler();
+        Assert.Empty(transport.Writes); // not from the constructor
+
+        controller.ApplyPending();
+
+        Assert.Equal(Galahad2Protocol.EncodeFollowMotherboardPump(), Assert.Single(transport.Writes));
+        Assert.Contains("Set G0:pump to follow the motherboard's PWM header", logger.Messages);
+    }
+
+    // The hand-over is re-sent on the keepalive interval like a duty, beside the fan's own duty,
+    // and logged only the first time.
+    [Fact]
+    public void AVisionLcd_ResendsTheHandOverOnTheKeepaliveInterval() {
+        var (controller, transport, clock, logger) = NewMotherboardPumpCooler();
+        controller.SetTarget(FanChannel, 40);
+        controller.ApplyPending();
+        transport.Clear();
+
+        controller.ApplyPending();
+        Assert.Empty(transport.Writes);
+
+        clock.Advance(ChannelWriteDecision.RefreshInterval);
+        controller.ApplyPending();
+
+        Assert.Equal(2, transport.Writes.Count);
+        Assert.Equal(Galahad2Protocol.EncodeSetFan(motherboardSync: false, dutyPercent: 40), transport.Writes[0]);
+        Assert.Equal(Galahad2Protocol.EncodeFollowMotherboardPump(), transport.Writes[1]);
+        Assert.Single(logger.Messages, m => m.Contains("follow the motherboard"));
+        Assert.Contains("Set G0:fan = 40%", logger.Messages);
+    }
+
+    // A cooler that was re-enumerated may have come back reset, so the hand-over goes out again at
+    // once, not at the next keepalive.
+    [Fact]
+    public void AVisionLcd_ResendsTheHandOverAfterAReconnect() {
+        var (controller, transport, _, _) = NewMotherboardPumpCooler();
+        controller.ApplyPending();
+        transport.Clear();
+
+        transport.Generation = 1;
+        controller.ApplyPending();
+
+        Assert.Equal(Galahad2Protocol.EncodeFollowMotherboardPump(), Assert.Single(transport.Writes));
+    }
+
+    // FanControl drives the pump through the motherboard header's control, so the plugin registers
+    // no pump control, but the pump's RPM stays, under the id it has always had.
+    [Fact]
+    public void AVisionLcd_ShowsNoPumpControl_ButKeepsBothSpeedReadings() {
+        var (controller, transport, _, _) = NewMotherboardPumpCooler();
+        transport.ReadReplies.Enqueue(VisionHandshakeReply(0, 2910, 0x01, 21, 6));
+        controller.PollRpm();
+
+        Assert.True(controller.IsChannelPopulated(FanChannel));
+        Assert.False(controller.IsChannelPopulated(PumpChannel));
+        Assert.Equal(2, controller.FanSpeedCount);
+        FanSpeedDescriptor pump = controller.DescribeFanSpeed(PumpChannel);
+        Assert.Equal("LianLi/0/ch1/fan", pump.Id);
+        Assert.Equal("Lian Li Galahad #1 Pump RPM", pump.Name);
+        Assert.Equal(2910f, controller.GetFanSpeed(PumpChannel));
+        Assert.Equal(0f, controller.GetFanSpeed(FanChannel));
+        Assert.Equal(21.6f, controller.GetTemperature(0));
+    }
+
+    // A pump control remembered from a build that had one cannot take the pump back: its duty and
+    // its release are ignored, and the hand-over keeps going out.
+    [Fact]
+    public void AVisionLcd_IgnoresADutyOrReleaseForThePump() {
+        var (controller, transport, clock, _) = NewMotherboardPumpCooler();
+        controller.SetTarget(PumpChannel, 0);
+        controller.ApplyPending();
+        controller.ReleaseChannel(PumpChannel);
+        clock.Advance(ChannelWriteDecision.RefreshInterval);
+        controller.ApplyPending();
+
+        Assert.Equal(2, transport.Writes.Count);
+        Assert.All(transport.Writes, w => Assert.Equal(Galahad2Protocol.EncodeFollowMotherboardPump(), w));
+    }
+
+    // The Trinity keeps both controls and its driven pump: nothing is sent until a control sets a
+    // duty, the duty goes out with the source byte clear, and the floor still applies.
+    [Theory]
+    [InlineData(0x7371)]
+    [InlineData(0x7373)]
+    public void ATrinity_KeepsItsPumpControl_AndDrivesThePumpItself(int productId) {
+        var transport = new FakeDeviceTransport();
+        var controller = new Galahad2Controller(0, transport, productId, new FakeClock(), new FakeLogger());
+
+        Assert.True(controller.IsChannelPopulated(FanChannel));
+        Assert.True(controller.IsChannelPopulated(PumpChannel));
+        controller.ApplyPending();
+        Assert.Empty(transport.Writes);
+
+        controller.SetTarget(PumpChannel, 20);
+        controller.ApplyPending();
+        Assert.Equal(Galahad2Protocol.EncodeSetPump(motherboardSync: false, dutyPercent: Galahad2Protocol.PumpDutyFloor), Assert.Single(transport.Writes));
+
+        controller.ReleaseChannel(PumpChannel);
+        transport.Clear();
+        controller.ApplyPending();
+        Assert.Empty(transport.Writes);
+    }
 }
