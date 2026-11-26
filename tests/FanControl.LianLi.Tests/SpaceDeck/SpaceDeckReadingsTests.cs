@@ -129,21 +129,24 @@ public class SpaceDeckReadingsTests {
 
     [Fact]
     public void ACatalogLongerThanALine_LosesReadingsFromTheEnd_AndDevicesLeftWithout() {
-        // Every character of these names is escaped as twelve, so a hundred readings are far past 64 KiB.
+        // Every character of these names is escaped as twelve, so thirty devices of two readings each
+        // are past 64 KiB while staying within the 32 devices the collector takes.
         string name = string.Concat(Enumerable.Repeat("\U0001F300", 64));
         var container = new FakeSensorsContainer();
-        for (int fan = 0; fan < 100; fan++) {
-            container.FanSensors.Add(new FakePluginSensor("LianLi/" + fan + "/" + new string('f', 100), name));
+        for (int device = 0; device < 30; device++) {
+            for (int fan = 0; fan < 2; fan++) {
+                container.FanSensors.Add(new FakePluginSensor("LianLi/" + device + "/" + fan + new string('f', 100), name));
+            }
         }
 
         SpaceDeckReadings readings = SpaceDeckReadings.From(container, _log);
         SpaceDeckCatalog catalog = readings.Catalog;
 
         Assert.InRange(catalog.Line.Length - 1, SpaceDeckPipeEncoder.MaximumLineBytes / 2, SpaceDeckPipeEncoder.MaximumLineBytes);
-        Assert.InRange(catalog.Sensors.Count, 1, 99);
-        Assert.Equal(catalog.Sensors.Count, catalog.Hardware.Count);
+        Assert.InRange(catalog.Sensors.Count, 1, 59);
+        Assert.Equal(catalog.Sensors.Select(s => s.HardwareId).Distinct().ToArray(), catalog.Hardware.Select(h => h.Id).ToArray());
         Assert.Equal(catalog.Sensors.Count, readings.Capture().Length);
-        Assert.Equal(100 - catalog.Sensors.Count, _log.Messages.Count(m => m.EndsWith("longer than SpaceDeck's 64 KiB line", StringComparison.Ordinal)));
+        Assert.Equal(60 - catalog.Sensors.Count, _log.Messages.Count(m => m.EndsWith("longer than SpaceDeck's 64 KiB line", StringComparison.Ordinal)));
     }
 
     [Fact]
