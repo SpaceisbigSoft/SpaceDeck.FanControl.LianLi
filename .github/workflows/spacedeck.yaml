@@ -1,6 +1,6 @@
 name: SpaceDeck build
 
-# SpaceDeck's build of the plugin, from the spacedeck branch of SpaceisbigSoft/FanControl.LianLi:
+# SpaceDeck's build of the plugin, from the spacedeck branch of SpaceisbigSoft/SpaceDeck.FanControl.LianLi:
 # upstream (lewisgibson/FanControl.LianLi) plus SpaceDeck's changes. It runs the same gates as
 # the upstream Build workflow for the standard and Lighting variants, then builds the one DLL
 # SpaceDeck ships - the Lighting variant, named FanControl.LianLi-SpaceDeck - and keeps it as a
