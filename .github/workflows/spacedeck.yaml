@@ -9,7 +9,8 @@ name: SpaceDeck build
 on:
     workflow_dispatch: {}
     push:
-        branches: [spacedeck]
+        # spacedeck is what ships; spacedeck/<topic> branches are work on their way into it.
+        branches: [spacedeck, 'spacedeck/**']
 
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
