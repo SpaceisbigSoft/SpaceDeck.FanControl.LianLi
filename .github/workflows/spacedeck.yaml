@@ -1,0 +1,101 @@
+name: SpaceDeck build
+
+# SpaceDeck's build of the plugin, from the spacedeck branch of SpaceisbigSoft/FanControl.LianLi:
+# upstream (lewisgibson/FanControl.LianLi) plus SpaceDeck's changes. It runs the same gates as
+# the upstream Build workflow for the standard and Lighting variants, then builds the one DLL
+# SpaceDeck ships - the Lighting variant, named FanControl.LianLi-SpaceDeck - and keeps it as a
+# workflow artifact. It never publishes a release; a release is made by hand when the owner asks.
+
+on:
+    workflow_dispatch: {}
+    push:
+        branches: [spacedeck]
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        runs-on: windows-latest
+        env:
+            CI: 'true'
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7.0.1
+              with:
+                  fetch-depth: 0
+
+            - name: Setup .NET
+              uses: actions/setup-dotnet@v6.1.0
+              with:
+                  global-json-file: global.json
+
+            - name: Compute Version
+              id: vars
+              # 2.0.x: SpaceDeck's builds rank above every upstream 1.x copy, so when two copies of
+              # the plugin are loaded, the plugin's copy guard leaves the SpaceDeck build driving the
+              # devices. run_number is monotonic, so each build gets a higher patch than the last.
+              run: |
+                  echo "version=2.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+                  echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+            - name: Restore
+              run: dotnet restore
+
+            - name: Format
+              run: dotnet format --verify-no-changes --no-restore
+
+            - name: Test Standard
+              # The same gate as upstream's Build workflow, full line and branch coverage included
+              # (the threshold is in the test project). The standard variant is tested even though it
+              # does not ship from here, so a change that is offered upstream keeps upstream's gate.
+              run: dotnet test -c Release -p:CollectCoverage=true
+
+            - name: Test Lighting
+              run: dotnet test -c Release -p:EnableLighting=true -p:CollectCoverage=true
+
+            - name: Build SpaceDeck
+              # The Lighting variant under SpaceDeck's file name. The plugin's Name (and so every
+              # FanControl binding, '<Name>/<sensor id>') is the Lighting build's own, so curves bound
+              # to the upstream Lighting build stay bound. Built after the tests, which rebuild the
+              # plugin at the default version and name.
+              run: >
+                  dotnet build src/FanControl.LianLi/FanControl.LianLi.csproj
+                  -c Release --no-restore -o artifacts/spacedeck
+                  -p:EnableLighting=true
+                  -p:AssemblyName=FanControl.LianLi-SpaceDeck
+                  -p:Version=${{ steps.vars.outputs.version }}
+                  -p:InformationalVersion=${{ steps.vars.outputs.version }}+${{ steps.vars.outputs.sha_short }}
+
+            - name: Package
+              shell: pwsh
+              run: |
+                  $version = "${{ steps.vars.outputs.version }}"
+                  $stage = "dist/FanControl.LianLi-SpaceDeck"
+                  New-Item -ItemType Directory -Force -Path $stage | Out-Null
+                  Copy-Item "artifacts/spacedeck/FanControl.LianLi-SpaceDeck.dll" $stage
+                  Copy-Item "LICENSE" "$stage/LICENSE.txt"
+                  Copy-Item "THIRD-PARTY-NOTICES.txt" $stage
+                  Copy-Item "SPACEDECK.md" "$stage/SPACEDECK.md"
+                  $zip = "dist/FanControl.LianLi-SpaceDeck-v$version.zip"
+                  Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+                  $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+                  Set-Content -Path "$zip.sha256" -Value $sha -Encoding ascii
+                  Get-FileHash "$stage/FanControl.LianLi-SpaceDeck.dll" -Algorithm SHA256 | Format-List
+
+            - name: Upload
+              uses: actions/upload-artifact@v4
+              with:
+                  name: FanControl.LianLi-SpaceDeck-v${{ steps.vars.outputs.version }}
+                  path: |
+                      dist/*.zip
+                      dist/*.sha256
+                  if-no-files-found: error
+                  retention-days: 90
