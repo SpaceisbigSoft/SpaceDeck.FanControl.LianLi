@@ -116,7 +116,7 @@ internal static class SpaceDeckPipeEncoder {
                 AppendEscape(builder, text[i + 1]);
                 i++;
             } else if (char.IsSurrogate(c)) {
-                AppendEscape(builder, '�');
+                AppendEscape(builder, '\ufffd');
             } else {
                 AppendEscape(builder, c);
             }

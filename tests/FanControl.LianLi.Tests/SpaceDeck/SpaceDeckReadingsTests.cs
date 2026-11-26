@@ -68,7 +68,7 @@ public class SpaceDeckReadingsTests {
     [Fact]
     public void NamesAndIds_AreMadeValid() {
         var container = new FakeSensorsContainer();
-        container.FanSensors.Add(new FakePluginSensor("LianLi/0/ch 0/fan", "Fan ‮\"1\""));
+        container.FanSensors.Add(new FakePluginSensor("LianLi/0/ch 0/fan", "Fan \u202e\"1\""));
         container.FanSensors.Add(new FakePluginSensor("LianLi/0/ch1/fan", null));
 
         SpaceDeckCatalog catalog = SpaceDeckReadings.From(container, _log).Catalog;

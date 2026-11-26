@@ -16,7 +16,7 @@ public class SpaceDeckTextTests {
 
     [Fact]
     public void AnIdCharacterOutsideTheSet_IsReplaced()
-        => Assert.Equal("LianLi/0/ch_1/a.b_c:d-e/_", SpaceDeckText.Id("LianLi/0/ch 1/a.b_c:d-e/é"));
+        => Assert.Equal("LianLi/0/ch_1/a.b_c:d-e/_", SpaceDeckText.Id("LianLi/0/ch 1/a.b_c:d-e/\u00e9"));
 
     [Fact]
     public void ALongId_IsCutTo128() {
@@ -31,15 +31,15 @@ public class SpaceDeckTextTests {
 
     [Fact]
     public void AValidName_IsKept_NonAsciiAndPairsIncluded()
-        => Assert.Equal("Ventilátor \U0001F300 #2", SpaceDeckText.Name("Ventilátor \U0001F300 #2", "x"));
+        => Assert.Equal("Ventil\u00e1tor \U0001F300 #2", SpaceDeckText.Name("Ventil\u00e1tor \U0001F300 #2", "x"));
 
     [Theory]
     [InlineData("a\u0007b")]
-    [InlineData("a‮b")]
-    [InlineData("a​b")]
-    [InlineData("a b")]
-    [InlineData("a b")]
-    [InlineData("a͸b")]
+    [InlineData("a\u202eb")]
+    [InlineData("a\u200bb")]
+    [InlineData("a\u2028b")]
+    [InlineData("a\u2029b")]
+    [InlineData("a\u0378b")]
     public void ACharacterTheCollectorRefuses_IsReplaced(string name)
         => Assert.Equal("a?b", SpaceDeckText.Name(name, "x"));
 
