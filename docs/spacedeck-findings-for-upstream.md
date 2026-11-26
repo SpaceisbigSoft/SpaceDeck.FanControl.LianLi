@@ -59,13 +59,23 @@ V286, net48 build, plugin running in both the app and the service) unless marked
 - Pump range for 0x7395 per lian-li-linux (`lianli-shared/src/aio.rs`): 800–3,600 rpm, so the plugin's 50 % pump
   floor (sized for the Trinity) is ≈ 2,000 rpm on this cooler.
 
-## 4. TL V2 wireless fans on real hardware
+## 4. TL V2 wireless fans on real hardware: a reset loop, then the transmitter disappeared
 
-- Two UNI FAN TL V2 wireless fans, one group (`6232e1`), on the L-Wireless dongle.
-- **v1.1.38**: speeds and curves worked, but the fans **jumped up and down instead of ramping smoothly**.
-- **v1.1.44** (built unchanged apart from name and version as SpaceDeck build v2.0.1): **the jumping is gone**.
-  Probably the "read TL and Galahad RPM only from the reply to the current poll" change (e1f98e9) or others between.
-- So: TL V2 wireless is confirmed working on real hardware with v1.1.44 (speeds, curves, smooth control).
+- Two UNI FAN TL V2 wireless fans, one group (`f8b9ef6232e1`), on the L-Wireless dongle (TX 0416:8040, RX 0416:8041).
+- **v1.1.38, until 2026-11-19 23:26** (plugin.log): `W0: transmitter failed 5 writes in a row; reset it through the
+  receiver`, then `W0: the transmitter was lost (generation 494217)` … `(generation 494253)`, every ~3 s, with
+  `reopened \\?\USB#VID_0416&PID_8040#… after 1 faulted transfer(s)` between. The generation counter shows the
+  transmitter had been lost and reset hundreds of thousands of times. The owner saw the fans "jump up and down instead
+  of ramping smoothly" in this period; the reset loop is the likely cause.
+- **From about 2026-11-22**: every Initialize logs `wireless receiver without a transmitter, skipped` for the 8041
+  receiver and `… PID_8040 … not found by this scan`; the kept channels' reconnect attempts fail with `Failed to open
+  WinUSB device at \\?\USB#VID_0416&PID_8040#7&8b2153a&0&3#… (error 2)`. The transmitter is no longer enumerated
+  at all. `remembered-controllers.json` has the wireless controller last seen 2026-11-14.
+- So FanControl showed the wireless group's sensors only as remembered stand-ins with no values, and the fans held
+  their last speed. (An earlier note here said v1.1.44 fixed the jumping; that was wrong: nothing was driving them.)
+- Questions for upstream: what makes the transmitter fail 5 writes in a row continuously, whether the
+  reset-through-the-receiver loop should back off or stop after N resets, and whether a reset can leave the
+  transmitter un-enumerated until the dongle is replugged. Results of a replug: to be added.
 
 ## 5. Things seen that upstream may want to know
 
