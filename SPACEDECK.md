@@ -17,6 +17,7 @@ general fix back upstream.
 - The upstream **Lighting** variant, built as `FanControl.LianLi-SpaceDeck.dll`, version 2.0.x.
 - The plugin's Name stays `Lian Li Uni (Lighting)` and every sensor id stays upstream's, so FanControl curves bound
   to the upstream Lighting build stay bound (FanControl keys a binding as `<plugin Name>/<sensor id>`).
+- It also sends its readings to SpaceDeck's collector when one is installed (see "Readings into SpaceDeck").
 - The plugin type stays `FanControl.LianLi.Plugin.LianLiPlugin`, so the plugin's copy guard sees this build and an
   upstream build as copies of one plugin and lets only one of them drive the devices (the higher version: this one).
 
@@ -43,6 +44,45 @@ What to set:
 - In the BIOS, leave that header on a safe value (a fixed high duty, or a curve that reaches full speed well before
   the CPU's limit). It is what the pump follows when FanControl is not running.
 - If the pump ever runs too slow, set the motherboard Pump Fan header to 100% (in FanControl, or in the BIOS).
+
+## Readings into SpaceDeck
+
+This build also sends what it has registered with FanControl to SpaceDeck's collector, so SpaceDeck shows the
+coolant temperatures, fan and pump speeds and fan duties next to its own sensors. Readings only: nothing on the pipe
+is ever a command, nothing the collector could send is read (the pipe is write-only from the plugin's side), and the
+plugin never reaches a device for it. FanControl, through the plugin, does all fan control, exactly as without it.
+
+- **What is sent.** Every fan sensor (RPM), temperature sensor (degrees C) and control (the duty FanControl is
+  applying, as the control last recorded it) the plugin registered, under its FanControl id (without the plugin's
+  Name), grouped into one device per controller, cooler or wireless fan group: the id up to its second slash
+  (`LianLi/1` for `LianLi/1/coolant/temp`, `LianLi/wa1b2c3d4e5f6` for a wireless group), named for what its readings'
+  names share (`Lian Li GA II LCD`, `Lian Li Galahad #2`, `Lian Li UNI FAN TL V2 Wireless d4e5f6`), a `cooler` for a
+  Galahad or HydroShift and `fans` otherwise. A `hello` line on connecting, the catalog after it and again whenever
+  the set changes, and the values once a second, nulls for values FanControl has not updated for five seconds.
+- **Where.** The local pipe `\\.\pipe\SpaceDeck.Plugins`, hosted by the collector's Windows service
+  (`SpaceDeckCollector`), in the protocol SpaceDeck documents in its `docs/PLUGIN-PIPE.md`. The plugin connects from a
+  thread of its own (`SpaceDeckPublisher`), never from FanControl's calls: 250 ms to connect, then a gap doubling
+  from one second to thirty while the collector is away; a write that blocks for five seconds drops the connection.
+  It logs the first failure of each run and each connection, not every try.
+- **How each end checks the other.** The plugin connects as a write-only client at the identification level, so the
+  collector can see who it is but never act as it, and before writing anything checks that the pipe's server
+  (`GetNamedPipeServerProcessId`) is the `SpaceDeckCollector` service's own process (`QueryServiceStatusEx`, asking
+  only for the query-status right); any other server is disconnected without a word. The collector, for its part,
+  checks that the client is `FanControl.exe` or `FanControl.Service.exe` in a folder only administrators can write
+  to, and disconnects anything that breaks its rules, which the plugin keeps to in one place each (`SpaceDeckText`
+  for ids and names, `SpaceDeckDeviceGrouping` for the devices, `SpaceDeckPipeEncoder` for the lines).
+- **Off switch.** On a PC without SpaceDeck's collector (no `SpaceDeckCollector` service) the plugin logs one line
+  and does nothing more until the next refresh. Whatever fails here - the catalog, a capture, the pipe - is logged
+  and costs only the readings.
+
+In the code: the SpaceDeck-only Plugin-layer types are in `src/FanControl.LianLi/SpaceDeck/` (namespace
+`FanControl.LianLi.SpaceDeck`); the two native calls are the Transport adapters `WindowsNamedPipeApi` and
+`WindowsServiceControlApi`, behind `INamedPipeApi` and `IServiceControlApi`, and every write is bounded by the same
+`IDeviceCallRunner` the device transfers use. Beyond upstream's permitted exception swallows this adds the
+publisher's own thread (a thread the plugin starts itself) and two guards at the composition root, around preparing
+the catalog in `Load` and capturing the values in `Update`, in the same spirit as the opt-in lighting path. FanControl
+creates a new plugin object on every refresh, so each object is one connection with its own `instance` id; the
+collector keeps its catalog across them.
 
 ## Building
 

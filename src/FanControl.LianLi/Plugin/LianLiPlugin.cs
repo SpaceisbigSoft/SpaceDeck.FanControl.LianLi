@@ -6,6 +6,7 @@ using System.Threading;
 using FanControl.LianLi.Devices;
 using FanControl.LianLi.Logging;
 using FanControl.LianLi.Protocol;
+using FanControl.LianLi.SpaceDeck;
 using FanControl.LianLi.Transport;
 using FanControl.LianLi.Worker;
 using FanControl.Plugins;
@@ -70,6 +71,16 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     // Where L-Connect's saved documents are: the machine's own in the host, a fixture in a test.
     private readonly LConnectLocations _lConnect;
 
+    // SpaceDeck's build: what sends the registered readings to the SpaceDeck collector (see
+    // SPACEDECK.md). Null when this object publishes nothing: the constructor upstream's tests use.
+    private readonly SpaceDeckPublication? _publication;
+
+    // SpaceDeck's build: this plugin object's id in the hello line, new with each object FanControl
+    // creates, and the publisher Load started, if any. Load and Update run on FanControl's threads and
+    // Close under _sync, so the publisher is swapped, never shared unguarded.
+    private readonly Guid _instance = Guid.NewGuid();
+    private SpaceDeckPublisher? _publisher;
+
 #if ENABLE_LIGHTING
     // L-Connect's saved looks, read at the start of each Initialize and only read after that, by
     // the builds and by any stand-in rebuilding a controller later.
@@ -97,7 +108,25 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     // enumeration probe that fails leaves a trace. A separate ctor because the enumerator and the
     // log are siblings the public ctor cannot reference from a single chained call.
     private LianLiPlugin(ILog log)
-        : this(new WindowsDeviceEnumerator(log), new DeviceCatalog(), new SystemClock(), new SystemDelay(), log, LConnectLocations.Machine, PluginRuntime.Process, PluginCopyGuard.Process) {
+        : this(new WindowsDeviceEnumerator(log), new DeviceCatalog(), new SystemClock(), new SystemDelay(), log, LConnectLocations.Machine, PluginRuntime.Process, PluginCopyGuard.Process, SpaceDeckPublication.Machine(log)) {
+    }
+
+    /// <summary>
+    /// Composition/test constructor that also sends the registered readings to the SpaceDeck
+    /// collector through <paramref name="publication"/>.
+    /// </summary>
+    internal LianLiPlugin(
+        IDeviceEnumerator enumerator,
+        DeviceCatalog catalog,
+        IClock clock,
+        IDelay delay,
+        ILog log,
+        LConnectLocations lConnect,
+        PluginRuntime runtime,
+        PluginCopyGuard guard,
+        SpaceDeckPublication publication)
+        : this(enumerator, catalog, clock, delay, log, lConnect, runtime, guard) {
+        _publication = publication ?? throw new ArgumentNullException(nameof(publication));
     }
 
     /// <summary>Composition/test constructor that accepts fakes for every dependency.</summary>
@@ -143,6 +172,7 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     /// </summary>
     public void Initialize() {
         lock (_sync) {
+            StopPublishing();
             _idle = !Activate();
             if (_idle) {
                 Reset();
@@ -1290,6 +1320,49 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
                 ? "nothing to register yet but a refresh is already wanted; a placeholder sensor is registered so FanControl hears it"
                 : "nothing to register yet but a device is still to come; a placeholder sensor is registered so FanControl hears the refresh that follows it");
         }
+
+        StartPublishing(container);
+    }
+
+    // SpaceDeck's build: send what was just registered to the SpaceDeck collector, from a thread of
+    // the publisher's own. Readings only, and optional like the lighting: a failure here is logged
+    // and costs only the readings, never the sensors FanControl was just given.
+    private void StartPublishing(IPluginSensorsContainer container) {
+        SpaceDeckPublisher? started = null;
+        try {
+            started = _publication?.Start(Name, _instance, container);
+        }
+#pragma warning disable CA1031 // opt-in feature: readings for SpaceDeck that cannot be prepared are not sent, and fan control is untouched
+        catch (Exception ex) {
+#pragma warning restore CA1031
+            _log.Write("SpaceDeck: the readings could not be prepared, so none are sent to SpaceDeck; fan control is unaffected: " + ex.Message);
+        }
+
+        Interlocked.Exchange(ref _publisher, started)?.Dispose();
+    }
+
+    // SpaceDeck's build: the publisher this object started, stopped by Initialize and Close.
+    private void StopPublishing() => Interlocked.Exchange(ref _publisher, null)?.Dispose();
+
+    // SpaceDeck's build: capture the readings' values on FanControl's own thread, as it updates the
+    // sensors, for the publisher to send; a reference swap, nothing that waits. One that fails stops
+    // the publishing for this plugin object and is logged once; fan control is untouched.
+    private void CaptureReadings() {
+        SpaceDeckPublisher? publisher = Volatile.Read(ref _publisher);
+        if (publisher is null) {
+            return;
+        }
+
+        try {
+            publisher.Capture();
+        }
+#pragma warning disable CA1031 // opt-in feature: a reading that cannot be captured stops the readings for SpaceDeck, never fan control
+        catch (Exception ex) {
+#pragma warning restore CA1031
+            _log.Write("SpaceDeck: the readings could not be captured, so no more are sent to SpaceDeck until the next refresh: " + ex.Message);
+            _ = Interlocked.CompareExchange(ref _publisher, null, publisher);
+            publisher.Dispose();
+        }
     }
 
     // Whether the controller remembered under key registers the sensor id now: not when the
@@ -1326,6 +1399,7 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
             return;
         }
 
+        CaptureReadings();
         if (_guard.OwnFileRemoved()) {
             _runtime.RequestRefresh("a newer copy of the plugin removed this copy's file, so a refresh hands it the fans", _log);
         }
@@ -1339,6 +1413,7 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     /// <summary>Stop the worker and release the controllers, and the claim on driving them, if this instance is the one running them.</summary>
     public void Close() {
         lock (_sync) {
+            StopPublishing();
             _runtime.StopIfOwnedBy(this);
             _guard.Release(this);
             _controllers.Clear();
