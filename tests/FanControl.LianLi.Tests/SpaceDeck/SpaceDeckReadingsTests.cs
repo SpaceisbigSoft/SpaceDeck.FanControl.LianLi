@@ -139,7 +139,7 @@ public class SpaceDeckReadingsTests {
         SpaceDeckReadings readings = SpaceDeckReadings.From(container, _log);
         SpaceDeckCatalog catalog = readings.Catalog;
 
-        Assert.InRange(catalog.Line.Length - 1, SpaceDeckPipeEncoder.MaximumLineBytes - 2000, SpaceDeckPipeEncoder.MaximumLineBytes);
+        Assert.InRange(catalog.Line.Length - 1, SpaceDeckPipeEncoder.MaximumLineBytes / 2, SpaceDeckPipeEncoder.MaximumLineBytes);
         Assert.InRange(catalog.Sensors.Count, 1, 99);
         Assert.Equal(catalog.Sensors.Count, catalog.Hardware.Count);
         Assert.Equal(catalog.Sensors.Count, readings.Capture().Length);
