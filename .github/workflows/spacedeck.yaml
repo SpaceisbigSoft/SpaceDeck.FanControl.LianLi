@@ -23,6 +23,8 @@ permissions:
 jobs:
     build:
         runs-on: windows-latest
+        # A test that hangs fails the run instead of holding a runner for hours.
+        timeout-minutes: 20
         env:
             CI: 'true'
         defaults:

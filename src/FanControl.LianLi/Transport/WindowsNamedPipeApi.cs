@@ -13,8 +13,7 @@ namespace FanControl.LianLi.Transport;
 /// <c>GetNamedPipeServerProcessId</c>.
 /// </summary>
 // Excluded from coverage: nothing here but the pipe stream and the P/Invoke call themselves. Every
-// decision made on their results is SpaceDeckPublisher's, unit-tested through a fake; the
-// Windows-only tests run this against a real pipe.
+// decision made on their results is SpaceDeckPublisher's, unit-tested through a fake.
 [ExcludeFromCodeCoverage]
 internal sealed class WindowsNamedPipeApi : INamedPipeApi {
     /// <summary>The single instance; it holds no state.</summary>

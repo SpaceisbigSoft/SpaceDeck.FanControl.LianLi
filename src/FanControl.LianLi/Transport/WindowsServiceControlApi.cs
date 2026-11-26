@@ -9,8 +9,7 @@ namespace FanControl.LianLi.Transport;
 /// <see cref="IServiceControlApi"/> over <c>advapi32</c>'s service control manager calls.
 /// </summary>
 // Excluded from coverage: nothing here but the P/Invoke calls themselves. Every decision made on
-// their result is SpaceDeckPublisher's, unit-tested through a fake; the Windows-only tests run this
-// against the machine's own services.
+// their result is SpaceDeckPublisher's, unit-tested through a fake.
 [ExcludeFromCodeCoverage]
 internal sealed class WindowsServiceControlApi : IServiceControlApi {
     // SC_MANAGER_CONNECT and SERVICE_QUERY_STATUS: the least the status query needs.
