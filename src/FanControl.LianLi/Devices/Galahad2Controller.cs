@@ -49,7 +49,14 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     // again each second, so an answer later than a second is overtaken by the next ask there too.
     private static readonly TimeSpan HandshakeTimeLimit = TimeSpan.FromSeconds(1);
 
+    // The name the cooler's sensors and controls start with. A Galahad II Vision LCD is named as Lian
+    // Li sells it, "GA II LCD": every variant (280, 360, SL-INF, TL Wireless) reports the same product
+    // ids, so the model is as far as the name can go, and it carries no number because the ids, not
+    // the names, tell two coolers apart. Every other Galahad keeps the numbered name it has always had.
+    private const string VisionName = "Lian Li GA II LCD";
+
     private readonly int _index;
+    private readonly string _name;
     private readonly IDeviceTransport _transport;
     private readonly bool _reportsCoolant;     // a Vision LCD, whose handshake reply carries the coolant
     private readonly bool _pumpFollowsMotherboard; // the pump is handed to the motherboard header
@@ -81,6 +88,10 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
         _index = index;
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _reportsCoolant = Galahad2Protocol.ReportsCoolant(productId);
+        // The coolers that report the coolant are exactly the Vision LCD's two product ids.
+        _name = _reportsCoolant
+            ? VisionName
+            : string.Format(CultureInfo.InvariantCulture, "Lian Li Galahad #{0}", index + 1);
         _pumpFollowsMotherboard = Galahad2PumpSourceDecision.FollowsMotherboard(productId);
         if (_pumpFollowsMotherboard) {
             _target[PumpChannel] = MotherboardPumpTarget;
@@ -107,15 +118,16 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
 
     /// <summary>
     /// The sensor identity for a Galahad channel - fan (0) or pump (1). The ids share the stable
-    /// LianLi/{index}/ch{channel} scheme so a saved curve binding survives a restart.
+    /// LianLi/{index}/ch{channel} scheme so a saved curve binding survives a restart; only the names
+    /// depend on the model (a binding keys on the id, so renaming never orphans it).
     /// </summary>
     public ChannelDescriptor Describe(int channel) {
         string role = channel == PumpChannel ? "Pump" : "Fan";
         return new ChannelDescriptor(
             $"LianLi/{_index}/ch{channel}/ctl",
-            $"Lian Li Galahad #{_index + 1} {role}",
+            $"{_name} {role}",
             $"LianLi/{_index}/ch{channel}/fan",
-            $"Lian Li Galahad #{_index + 1} {role} RPM");
+            $"{_name} {role} RPM");
     }
 
     /// <summary>
@@ -140,7 +152,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     public TemperatureDescriptor DescribeTemperature(int index) {
         return new TemperatureDescriptor(
             $"LianLi/{_index}/coolant/temp",
-            $"Lian Li Galahad #{_index + 1} Coolant");
+            $"{_name} Coolant");
     }
 
     /// <inheritdoc />

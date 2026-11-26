@@ -471,7 +471,7 @@ public class Galahad2ControllerTests {
         Assert.Equal(1, controller.TemperatureCount);
         TemperatureDescriptor coolant = controller.DescribeTemperature(0);
         Assert.Equal("LianLi/0/coolant/temp", coolant.Id);
-        Assert.Equal("Lian Li Galahad #1 Coolant", coolant.Name);
+        Assert.Equal("Lian Li GA II LCD Coolant", coolant.Name);
         Assert.Equal(37.8f, controller.GetTemperature(0));
         Assert.Equal(1440f, controller.GetRpm(FanChannel));
         Assert.Equal(2670f, controller.GetRpm(PumpChannel));
@@ -582,6 +582,26 @@ public class Galahad2ControllerTests {
         Assert.Equal(Galahad2Protocol.EncodeFollowMotherboardPump(), Assert.Single(transport.Writes));
     }
 
+    // A Vision LCD is named as Lian Li sells it, whatever its index; every other Galahad keeps its
+    // numbered name. Only the names differ: the ids, which FanControl's bindings key on, are the same.
+    [Fact]
+    public void AVisionLcd_IsNamedAsTheGaIILcd_AndATrinityKeepsItsNumberedName() {
+        var vision = new Galahad2Controller(1, new FakeDeviceTransport(), VisionProductId, new FakeClock(), new FakeLogger());
+        var trinity = new Galahad2Controller(1, new FakeDeviceTransport(), TrinityProductId, new FakeClock(), new FakeLogger());
+
+        ChannelDescriptor visionFan = vision.Describe(FanChannel);
+        Assert.Equal("LianLi/1/ch0/ctl", visionFan.ControlId);
+        Assert.Equal("Lian Li GA II LCD Fan", visionFan.ControlName);
+        Assert.Equal("Lian Li GA II LCD Fan RPM", visionFan.RpmName);
+        Assert.Equal("Lian Li GA II LCD Pump RPM", vision.Describe(PumpChannel).RpmName);
+        Assert.Equal("Lian Li GA II LCD Coolant", vision.DescribeTemperature(0).Name);
+
+        ChannelDescriptor trinityPump = trinity.Describe(PumpChannel);
+        Assert.Equal("LianLi/1/ch1/ctl", trinityPump.ControlId);
+        Assert.Equal("Lian Li Galahad #2 Pump", trinityPump.ControlName);
+        Assert.Equal("Lian Li Galahad #2 Pump RPM", trinityPump.RpmName);
+    }
+
     // FanControl drives the pump through the motherboard header's control, so the plugin registers
     // no pump control, but the pump's RPM stays, under the id it has always had.
     [Fact]
@@ -595,7 +615,7 @@ public class Galahad2ControllerTests {
         Assert.Equal(2, controller.FanSpeedCount);
         FanSpeedDescriptor pump = controller.DescribeFanSpeed(PumpChannel);
         Assert.Equal("LianLi/0/ch1/fan", pump.Id);
-        Assert.Equal("Lian Li Galahad #1 Pump RPM", pump.Name);
+        Assert.Equal("Lian Li GA II LCD Pump RPM", pump.Name);
         Assert.Equal(2910f, controller.GetFanSpeed(PumpChannel));
         Assert.Equal(0f, controller.GetFanSpeed(FanChannel));
         Assert.Equal(21.6f, controller.GetTemperature(0));

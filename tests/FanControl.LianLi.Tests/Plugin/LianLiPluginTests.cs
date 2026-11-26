@@ -310,7 +310,7 @@ public class LianLiPluginTests {
         Assert.Equal(new[] { "LianLi/0/ch0/fan", "LianLi/0/ch1/fan" }, container.FanSensors.Select(s => s.Id));
         IPluginSensor coolant = Assert.Single(container.TempSensors);
         Assert.Equal("LianLi/0/coolant/temp", coolant.Id);
-        Assert.Equal("Lian Li Galahad #1 Coolant", coolant.Name);
+        Assert.Equal("Lian Li GA II LCD Coolant", coolant.Name);
 
         plugin.Close();
     }
