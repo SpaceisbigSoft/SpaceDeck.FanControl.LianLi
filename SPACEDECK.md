@@ -1,6 +1,7 @@
-# SpaceDeck's build of FanControl.LianLi
+# SpaceDeck.FanControl.LianLi — SpaceDeck's FanControl plugin for Lian Li
 
-This repository is a fork of [lewisgibson/FanControl.LianLi](https://github.com/lewisgibson/FanControl.LianLi)
+This repository (`SpaceisbigSoft/SpaceDeck.FanControl.LianLi`, renamed from `SpaceisbigSoft/FanControl.LianLi` on
+2026-11-26) is a fork of [lewisgibson/FanControl.LianLi](https://github.com/lewisgibson/FanControl.LianLi)
 (MIT, Copyright (c) 2026 Lewis Gibson) maintained for [SpaceDeck](https://github.com/SpaceisbigSoft/SpaceDeck), a
 Windows hardware monitor. Upstream does all the hard work; this fork adds what SpaceDeck needs and offers every
 general fix back upstream.
