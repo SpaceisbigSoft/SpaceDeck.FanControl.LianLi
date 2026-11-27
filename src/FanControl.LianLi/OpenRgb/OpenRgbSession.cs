@@ -113,7 +113,7 @@ internal sealed class OpenRgbSession {
         return _rings[(int)deviceIndex];
     }
 
-    private static IReadOnlyList<byte[]> Reply(long deviceIndex, long packetId, byte[] payload)
+    private static byte[][] Reply(long deviceIndex, long packetId, byte[] payload)
         => new[] { OpenRgbProtocol.Packet(deviceIndex, packetId, payload) };
 
     // The name as the client sent it, up to its zero, every character that is not printable ASCII a
