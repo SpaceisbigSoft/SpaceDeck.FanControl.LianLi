@@ -57,6 +57,14 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     // once a second, and nothing shows that a cooler wants to be asked more often.
     private static readonly TimeSpan MinimumFrameGap = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan MinimumHandshakeGap = TimeSpan.FromMilliseconds(500);
+#if ENABLE_LIGHTING
+
+    // The ring's built-in effects need a moment between 0x83 writes, or the ring can keep showing an
+    // older one (register note), and a direct look is sent at most ten times a second: enough for an
+    // OpenRGB effect to move, and well inside what the screen's B packets already carry.
+    private static readonly TimeSpan MinimumEffectGap = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan MinimumDirectGap = TimeSpan.FromMilliseconds(100);
+#endif
 
     // The name the cooler's sensors and controls start with. A Galahad II Vision LCD is named as Lian
     // Li sells it, "GA II LCD": every variant (280, 360, SL-INF, TL Wireless) reports the same product
@@ -100,6 +108,11 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     private DateTime? _lastFrameUtc;
     private bool _framesFailing;
     private bool _framesShown;
+#if ENABLE_LIGHTING
+    private DateTime? _lastEffectUtc;
+    private DateTime? _lastDirectUtc;
+    private bool _ringFailing;
+#endif
 
     public Galahad2Controller(int index, IDeviceTransport transport, int productId, IClock clock, ILog log)
         : this(index, transport, productId, clock, log, null) {
@@ -278,6 +291,9 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
         }
 
         SendScreenFrame();
+#if ENABLE_LIGHTING
+        SendRingLook();
+#endif
     }
 
     /// <inheritdoc />
@@ -418,6 +434,59 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
         }
     }
 
+#if ENABLE_LIGHTING
+    // Send the ring's newest look handed over by the OpenRGB server, between two status polls: a
+    // direct look as 0x14, at most ten a second, an effect as 0x83, at least a second apart. One that
+    // is not due yet stays waiting, and a newer one replaces it there, so the ring always ends on the
+    // newest. Like a frame, it waits while the cooler is off the bus, and a write that fails costs only
+    // that look and is logged once until one is sent again.
+    private void SendRingLook() {
+        if (_handoff is null || _transport.IsFaulted || _handoff.PeekLook() is not Galahad2RingLook look) {
+            return;
+        }
+
+        bool direct = look.Mode == Galahad2RingMode.Direct;
+        DateTime now = _clock.UtcNow;
+        DateTime? last = direct ? _lastDirectUtc : _lastEffectUtc;
+        if (last is DateTime then && ClockSpan.Since(now, then) < (direct ? MinimumDirectGap : MinimumEffectGap)) {
+            return;
+        }
+
+        _handoff.Taken(look);
+        if (direct) {
+            _lastDirectUtc = now;
+        } else {
+            _lastEffectUtc = now;
+        }
+
+        try {
+            foreach (byte[] packet in Galahad2RingEncoder.Encode(look)) {
+                _transport.Write(packet);
+            }
+        }
+#pragma warning disable CA1031 // opt-in feature: a ring look that cannot be written costs only that look, never the duties or the status poll
+        catch (Exception ex) {
+#pragma warning restore CA1031
+            if (!_ringFailing) {
+                _ringFailing = true;
+                _log.Write(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "G{0}: the screen ring's {1} look could not be sent (logged once until one is sent): {2}",
+                    _index,
+                    look.Mode,
+                    ex.Message));
+            }
+
+            return;
+        }
+
+        if (_ringFailing) {
+            _ringFailing = false;
+            _log.Write(string.Format(CultureInfo.InvariantCulture, "G{0}: the screen ring's looks are sent again", _index));
+        }
+    }
+
+#endif
     // The first read always goes ahead, so a slow write never costs the poll its answer; every later
     // read waits on the limit. A clock that stepped back counts as within it, and the report count
     // still bounds the poll.

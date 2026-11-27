@@ -5,6 +5,9 @@ using System.Linq;
 using System.Threading;
 using FanControl.LianLi.Devices;
 using FanControl.LianLi.Logging;
+#if ENABLE_LIGHTING
+using FanControl.LianLi.OpenRgb;
+#endif
 using FanControl.LianLi.Protocol;
 using FanControl.LianLi.SpaceDeck;
 using FanControl.LianLi.Transport;
@@ -88,6 +91,13 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     // L-Connect's saved looks, read at the start of each Initialize and only read after that, by
     // the builds and by any stand-in rebuilding a controller later.
     private volatile IReadOnlyList<LConnectControllerConfiguration> _lightingConfigurations = Array.Empty<LConnectControllerConfiguration>();
+
+    // SpaceDeck's Lighting build: the OpenRGB SDK server for the screen rings (see SPACEDECK.md), the
+    // ring looks saved through it, read at the start of each Initialize like L-Connect's, and the server
+    // Load started. Null hosting: the constructors upstream's tests use, which start no server.
+    private readonly OpenRgbHosting? _openRgb;
+    private volatile IReadOnlyDictionary<string, Galahad2RingLook> _savedRings = new Dictionary<string, Galahad2RingLook>();
+    private OpenRgbServer? _openRgbServer;
 #endif
 
     /// <summary>
@@ -111,8 +121,33 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     // enumeration probe that fails leaves a trace. A separate ctor because the enumerator and the
     // log are siblings the public ctor cannot reference from a single chained call.
     private LianLiPlugin(ILog log)
+#if ENABLE_LIGHTING
+        : this(new WindowsDeviceEnumerator(log), new DeviceCatalog(), new SystemClock(), new SystemDelay(), log, LConnectLocations.Machine, PluginRuntime.Process, PluginCopyGuard.Process, SpaceDeckPublication.Machine(log), OpenRgbHosting.Machine(log)) {
+#else
         : this(new WindowsDeviceEnumerator(log), new DeviceCatalog(), new SystemClock(), new SystemDelay(), log, LConnectLocations.Machine, PluginRuntime.Process, PluginCopyGuard.Process, SpaceDeckPublication.Machine(log)) {
+#endif
     }
+#if ENABLE_LIGHTING
+
+    /// <summary>
+    /// Composition/test constructor that also serves the screen rings to OpenRGB through
+    /// <paramref name="openRgb"/>.
+    /// </summary>
+    internal LianLiPlugin(
+        IDeviceEnumerator enumerator,
+        DeviceCatalog catalog,
+        IClock clock,
+        IDelay delay,
+        ILog log,
+        LConnectLocations lConnect,
+        PluginRuntime runtime,
+        PluginCopyGuard guard,
+        SpaceDeckPublication publication,
+        OpenRgbHosting openRgb)
+        : this(enumerator, catalog, clock, delay, log, lConnect, runtime, guard, publication) {
+        _openRgb = openRgb ?? throw new ArgumentNullException(nameof(openRgb));
+    }
+#endif
 
     /// <summary>
     /// Composition/test constructor that also sends the registered readings to the SpaceDeck
@@ -247,6 +282,7 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
         // (opt-in). Absent (L-Connect not installed) or unreadable config means no looks, so
         // no lighting is driven at all.
         _lightingConfigurations = ReadLConnectLighting();
+        _savedRings = _openRgb?.Looks.Load(_log) ?? new Dictionary<string, Galahad2RingLook>();
 #endif
 
         // Every build also locates the 0x0416 command-packet controllers (Uni Fan TL, Galahad II),
@@ -372,6 +408,10 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
             }
         }
     }
+
+    // The id a cooler's sensors share, LianLi/{index}: its hardware id for SpaceDeck and its ring's
+    // serial and saved-look key for OpenRGB.
+    private static string CoolerId(int index) => "LianLi/" + index.ToString(CultureInfo.InvariantCulture);
 
     // L-Connect drives one transmitter and one receiver - the first of each it finds - and so does
     // the plugin; a dongle without a partner, or beyond the first pair, is logged and left alone.
@@ -1191,9 +1231,10 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
             // a poll only ever takes the reply that echoes its handshake. ApplyLighting never throws.
             IDeviceTransport ownedTransport = transport;
             transport = null;
-            _ = ApplyLighting(ownedTransport, info, _lightingConfigurations);
+            CoolerHandoff? ring = RingOf(kind, index, info);
+            _ = ApplyLighting(ownedTransport, info, _lightingConfigurations, ring);
             // And again whenever the transport reconnects a re-enumerated (possibly reset) device.
-            controller.ReplayOnReconnect(() => ApplyLighting(ownedTransport, info, _lightingConfigurations));
+            controller.ReplayOnReconnect(() => ApplyLighting(ownedTransport, info, _lightingConfigurations, ring));
 #else
             transport = null; // ownership passed to the controller, which disposes it
 #endif
@@ -1349,6 +1390,9 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
         }
 
         StartPublishing(container);
+#if ENABLE_LIGHTING
+        StartOpenRgb();
+#endif
     }
 
     // SpaceDeck's build: send what was just registered to the SpaceDeck collector, from a thread of
@@ -1361,7 +1405,7 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
             if (_publication is SpaceDeckPublication publication) {
                 var handoffs = new Dictionary<string, CoolerHandoff>(StringComparer.Ordinal);
                 foreach (KeyValuePair<int, IFanDevice> cooler in ScreenCoolers()) {
-                    handoffs["LianLi/" + cooler.Key.ToString(CultureInfo.InvariantCulture)] = _runtime.Coolers.For(cooler.Key);
+                    handoffs[CoolerId(cooler.Key)] = _runtime.Coolers.For(cooler.Key);
                 }
 
                 // A screen is only shown for a cooler whose readings, and so whose catalog entry, are sent.
@@ -1386,7 +1430,27 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     private void StopPublishing() {
         Interlocked.Exchange(ref _publisher, null)?.Dispose();
         Interlocked.Exchange(ref _screenClient, null)?.Dispose();
+#if ENABLE_LIGHTING
+        Interlocked.Exchange(ref _openRgbServer, null)?.Dispose();
+#endif
     }
+#if ENABLE_LIGHTING
+
+    // SpaceDeck's Lighting build: serve the Vision LCDs' screen rings to OpenRGB, from the server's own
+    // threads. Starting only makes the rings and a thread; whatever can fail (the port, a client) fails
+    // on the server's threads, where it is logged and costs only OpenRGB's control of the rings.
+    private void StartOpenRgb() {
+        OpenRgbServer? started = null;
+        if (_openRgb is OpenRgbHosting openRgb) {
+            var rings = ScreenCoolers()
+                .Select(cooler => new KeyValuePair<string, CoolerHandoff>(CoolerId(cooler.Key), _runtime.Coolers.For(cooler.Key)))
+                .ToArray();
+            started = openRgb.Start(rings, SpaceDeckPublication.VersionOf(typeof(LianLiPlugin).Assembly));
+        }
+
+        Interlocked.Exchange(ref _openRgbServer, started)?.Dispose();
+    }
+#endif
 
     // SpaceDeck's build: capture the readings' values on FanControl's own thread, as it updates the
     // sensors, for the publisher to send; a reference swap, nothing that waits. One that fails stops
@@ -1521,6 +1585,25 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
 #pragma warning restore CA1031
     }
 
+    // SpaceDeck's Lighting build: the handoff a Vision LCD's screen ring takes OpenRGB's looks through,
+    // given the look saved through OpenRGB when this process has not set one since; null for every
+    // other controller.
+    private CoolerHandoff? RingOf(DeviceKind kind, int index, LocatedDevice info)
+    {
+        if (kind != DeviceKind.Galahad2 || !Galahad2Protocol.HasScreen(info.ProductId))
+        {
+            return null;
+        }
+
+        CoolerHandoff ring = _runtime.Coolers.For(index);
+        if (_savedRings.TryGetValue(CoolerId(index), out Galahad2RingLook? saved))
+        {
+            ring.RestoreLook(saved);
+        }
+
+        return ring;
+    }
+
     // Re-apply the saved look for one located controller, matched to its L-Connect config by
     // instance token. No match -> no lighting. A matched controller of an unsupported family
     // is logged and skipped (its lighting is left as-is), never driven with guessed bytes. A
@@ -1533,10 +1616,18 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     // sensor in L-Connect is left as found, since the plugin has no sensor reading to colour it
     // from. The same runs on every reconnect, as L-Connect's resume does. Returns true once the
     // device's lighting is done - applied, or nothing to apply - and false when the writes
-    // failed, so the controller's reconnect replay keeps the look owed and tries it again.
+    // failed, so the controller's reconnect replay keeps the look owed and tries it again. A Vision
+    // screen ring with a look set through OpenRGB (ring, its handoff) shows that look, handed to the
+    // cooler's worker, instead of L-Connect's, which then sets only the fan light.
     private bool ApplyLighting(
-        IDeviceTransport transport, LocatedDevice info, IReadOnlyList<LConnectControllerConfiguration> configurations)
+        IDeviceTransport transport, LocatedDevice info, IReadOnlyList<LConnectControllerConfiguration> configurations, CoolerHandoff? ring = null)
     {
+        bool openRgbRing = ring?.OfferLastLook() ?? false;
+        if (openRgbRing)
+        {
+            _log.Write("  screen ring of " + info.DevicePath + ": the look set through OpenRGB is shown, not L-Connect's");
+        }
+
         LConnectControllerConfiguration? match = null;
         foreach (LConnectControllerConfiguration configuration in configurations)
         {
@@ -1629,7 +1720,7 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
                 break;
             case Galahad2VisionProductId:
             case Galahad2VisionAlternateProductId:
-                Galahad2ScreenLightingState? screen = match.GalahadScreen;
+                Galahad2ScreenLightingState? screen = openRgbRing ? null : match.GalahadScreen;
                 if (screen != null && screen.IsDynamicMode)
                 {
                     // L-Connect recolours a dynamic ring every second from a CPU, GPU, pump or

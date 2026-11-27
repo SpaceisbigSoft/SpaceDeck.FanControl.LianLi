@@ -126,6 +126,53 @@ In the code: the reading thread is another thread the plugin starts itself, and 
 `Galahad2Controller` like the opt-in lighting path, a failure costing only the frame. The read-only pipe connection is
 the `WindowsNamedPipeApi` adapter's, behind `INamedPipeApi.TryConnectForReading`.
 
+## Lighting through OpenRGB
+
+This build (the Lighting variant) also serves the Galahad II Vision LCD's screen ring - the twelve LEDs round the
+screen - to [OpenRGB](https://openrgb.org) through OpenRGB's own SDK network protocol, so OpenRGB can set it beside
+everything else it drives. The plugin stays the only program that opens the cooler.
+
+**Connecting OpenRGB.** In OpenRGB, open **Settings → SDK Client**, add the server `127.0.0.1` port `6743`, and
+connect. The cooler appears as a device named `Lian Li GA II LCD` (type Cooler) with one zone, `Screen ring`, of 12
+LEDs. The port is 6743, not OpenRGB's own 6742, so OpenRGB's own SDK server can run beside it. The plugin log says
+`OpenRGB: SDK server listening on 127.0.0.1:6743` once it is up.
+
+- **Modes.** Direct (one colour per LED, sent as 0x14 SetLEDColors on the screen path), Off, Static, Breathing,
+  Rainbow, Rainbow Morph, Runway and Meteor (the cooler's own effects, sent as 0x83 SetPumpLighting). Speed and
+  brightness are 0 to 4, the cooler's own scale; Static, Breathing, Runway and Meteor take 1 to 4 colours of their
+  own; Rainbow, Runway and Meteor go left (counter-clockwise) or right (clockwise). Every 0x83 is sent with the scope
+  byte at outer (1): on the Vision only outer or all light the ring, and inner, which L-Connect writes, shows nothing.
+- **How a command reaches the ring.** Nothing a client sends is written to the cooler as it is: a command only
+  changes the server's view of the ring, which hands the resulting look to the cooler's own worker thread through the
+  same slot as the screen frames (`CoolerHandoff`, newest wins), and the worker builds the packets itself
+  (`Galahad2RingEncoder`). An effect is written at least a second after the last one (several in quick succession
+  can leave the ring on an older one), a Direct update at most ten times a second; one that is not due yet waits,
+  replaced by any newer one. A write that fails costs only that look, and is logged once until one is sent again.
+- **Saving.** OpenRGB's "Save to device" (SAVEMODE) keeps the look in `openrgb-looks.json` beside
+  `remembered-controllers.json` in `%LOCALAPPDATA%\FanControl.LianLi` (or the SYSTEM profile's, when FanControl
+  runs as its service). A saved look - and, until FanControl restarts, the last look set through OpenRGB - is shown
+  again at each start and after every reconnect instead of L-Connect's saved ring; L-Connect's fan light is still
+  replayed. A file that is missing, locked or corrupt is logged and L-Connect's ring is replayed as before.
+- **Protocol.** The server speaks SDK protocol versions 0 to 6, agreeing on the lower of the client's and 6, and
+  describes the controller in the layout of the agreed version (checked field by field against lian-li-linux's
+  server). It answers REQUEST_CONTROLLER_COUNT, REQUEST_CONTROLLER_DATA (in the version the request asks for),
+  REQUEST_PROTOCOL_VERSION, SET_CLIENT_NAME and the profile and plugin list requests (empty), and acts on
+  UPDATELEDS, UPDATEZONELEDS, UPDATESINGLELED, SETCUSTOMMODE, UPDATEMODE and SAVEMODE; any other packet is
+  ignored, as OpenRGB's own server ignores one. The controller list is fixed for the life of a server: the plugin
+  starts one per plugin object (Load) and stops it at Close, so a FanControl refresh disconnects the clients and
+  OpenRGB reconnects to the new one by itself; DEVICE_LIST_UPDATED therefore never falls due.
+- **Treated as hostile.** The listener is on the loopback address only, but it may run as LocalSystem (inside
+  `FanControl.Service`) and any program on this PC can connect. So: at most 4 clients (another is closed as it
+  connects), a packet is at most 64 KiB and must arrive whole within 10 seconds of its first byte, and every packet
+  must decode exactly - its size fields, no bytes left over, a controller, zone, LED and mode the ring has, the
+  mode's own name, colour mode, colour count and direction. Anything else closes that client; each kind of failure
+  is logged once per server. An idle client stays connected, as OpenRGB's clients do.
+
+In the code: the OpenRGB types are in `src/FanControl.LianLi/OpenRgb/` (namespace `FanControl.LianLi.OpenRgb`,
+Plugin layer); the sockets are the Transport adapter `WindowsLoopbackListenerApi`, behind `ILoopbackListenerApi`.
+The server's threads are threads the plugin starts itself, and the ring write is guarded in `Galahad2Controller`
+like the opt-in lighting path, a failure costing only that look.
+
 ## Building
 
 The `SpaceDeck build` workflow (`.github/workflows/spacedeck.yaml`) runs on every push to `spacedeck`: format check,

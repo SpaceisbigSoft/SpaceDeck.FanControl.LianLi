@@ -792,4 +792,99 @@ public class Galahad2ControllerTests {
         Assert.Equal(3, transport.Writes.Count);
         Assert.Equal(31.5f, controller.GetTemperature(0));
     }
+#if ENABLE_LIGHTING
+
+    // ---------- the screen ring, through OpenRGB ----------
+
+    private static Galahad2RingLook Effect(int speed) => new Galahad2RingLook(Galahad2RingMode.Breathing, speed, 4, 0, new[] { new RgbColor(9, 8, 7) });
+
+    private static List<byte[]> RingWrites(FakeDeviceTransport transport)
+        => transport.Writes.Where(w => (w[0] == 0x02 && w[1] == 0x14) || (w[0] == 0x01 && w[1] == 0x83)).ToList();
+
+    [Fact]
+    public void ADirectLook_IsSentAfterTheFrame_AtMostTenTimesASecond_TheNewestWinning() {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        handoff.OfferFrame(Jpeg(10));
+        handoff.OfferLook(Galahad2RingLook.DirectOf(new RgbColor(1, 0, 0)));
+        controller.ApplyPending();
+
+        Assert.Equal(0x0E, transport.Writes[1][1]);
+        Assert.Equal(Galahad2RingEncoder.Encode(Galahad2RingLook.DirectOf(new RgbColor(1, 0, 0))), transport.Writes.Skip(2).ToList());
+
+        transport.Clear();
+        handoff.OfferLook(Galahad2RingLook.DirectOf(new RgbColor(2, 0, 0)));
+        Galahad2RingLook newest = Galahad2RingLook.DirectOf(new RgbColor(3, 0, 0));
+        handoff.OfferLook(newest);
+        clock.Advance(TimeSpan.FromMilliseconds(99));
+        controller.ApplyPending();
+        Assert.Empty(RingWrites(transport));
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        controller.ApplyPending();
+        Assert.Equal(Galahad2RingEncoder.Encode(newest), RingWrites(transport));
+        Assert.Null(handoff.PeekLook());
+    }
+
+    [Fact]
+    public void AnEffect_IsSentAsOne0x83_AtLeastASecondAfterTheLast_ButADirectLookNeedNotWaitForIt() {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        handoff.OfferLook(Effect(1));
+        controller.ApplyPending();
+        Assert.Single(RingWrites(transport));
+        transport.Clear();
+
+        handoff.OfferLook(Effect(2));
+        clock.Advance(TimeSpan.FromMilliseconds(999));
+        controller.ApplyPending();
+        Assert.Empty(RingWrites(transport));
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        controller.ApplyPending();
+        Assert.Equal(Galahad2RingEncoder.Encode(Effect(2)), RingWrites(transport));
+
+        transport.Clear();
+        handoff.OfferLook(Galahad2RingLook.DirectOf(new RgbColor(5, 5, 5)));
+        controller.ApplyPending();
+        Assert.Single(RingWrites(transport));
+    }
+
+    [Fact]
+    public void ALook_WaitsWhileTheCoolerIsOffTheBus() {
+        var (controller, transport, _, handoff, _) = NewScreen();
+        transport.IsFaulted = true;
+        handoff.OfferLook(Effect(1));
+
+        controller.ApplyPending();
+        Assert.Empty(RingWrites(transport));
+
+        transport.IsFaulted = false;
+        controller.ApplyPending();
+        Assert.Single(RingWrites(transport));
+    }
+
+    [Fact]
+    public void ALookThatCannotBeWritten_CostsOnlyThatLook_AndIsLoggedOnceUntilOneIsSent() {
+        var (controller, transport, clock, handoff, logger) = NewScreen();
+        transport.FailWrite = report => report[1] == 0x83;
+        handoff.OfferLook(Effect(1));
+        controller.ApplyPending();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferLook(Effect(2));
+        controller.ApplyPending();
+
+        Assert.Single(logger.Messages, m => m == "G0: the screen ring's Breathing look could not be sent (logged once until one is sent): simulated device write failure");
+        Assert.Null(handoff.PeekLook());
+
+        transport.FailWrite = null;
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferLook(Effect(3));
+        controller.ApplyPending();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferLook(Effect(4));
+        controller.ApplyPending();
+
+        Assert.Equal(2, RingWrites(transport).Count);
+        Assert.Single(logger.Messages, m => m == "G0: the screen ring's looks are sent again");
+    }
+#endif
 }

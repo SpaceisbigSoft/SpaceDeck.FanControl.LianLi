@@ -1,5 +1,8 @@
 using System;
 using FanControl.LianLi.Devices;
+#if ENABLE_LIGHTING
+using FanControl.LianLi.Protocol;
+#endif
 using FanControl.LianLi.Tests.Fakes;
 using Xunit;
 
@@ -68,4 +71,60 @@ public class CoolerHandoffTests {
         Assert.Throws<ArgumentNullException>(() => new CoolerHandoff(null!));
         Assert.Throws<ArgumentNullException>(() => new CoolerHandoff(_clock).OfferFrame(null!));
     }
+#if ENABLE_LIGHTING
+
+    private static readonly Galahad2RingLook Red = Galahad2RingLook.DirectOf(new RgbColor(255, 0, 0));
+    private static readonly Galahad2RingLook Blue = Galahad2RingLook.DirectOf(new RgbColor(0, 0, 255));
+
+    [Fact]
+    public void AnOfferedLook_WaitsUntilTaken_AndStaysTheLastLook() {
+        var handoff = new CoolerHandoff(_clock);
+        int wakes = 0;
+        handoff.WakeWith(() => wakes++);
+        Assert.Null(handoff.LastLook);
+        Assert.False(handoff.OfferLastLook());
+
+        handoff.OfferLook(Red);
+
+        Assert.Same(Red, handoff.PeekLook());
+        Assert.Same(Red, handoff.PeekLook());
+        handoff.Taken(Red);
+        Assert.Null(handoff.PeekLook());
+        Assert.Same(Red, handoff.LastLook);
+        Assert.Equal(1, wakes);
+    }
+
+    [Fact]
+    public void ALookTaken_AfterANewerOneReplacedIt_LeavesTheNewerOneWaiting() {
+        var handoff = new CoolerHandoff(_clock);
+        handoff.OfferLook(Red);
+
+        handoff.OfferLook(Blue);
+        handoff.Taken(Red);
+
+        Assert.Same(Blue, handoff.PeekLook());
+        Assert.Same(Blue, handoff.LastLook);
+    }
+
+    [Fact]
+    public void ARestoredLook_IsTheLastLookOnlyWhenNoneWasOffered_AndIsSentOnlyWhenOfferedAgain() {
+        var handoff = new CoolerHandoff(_clock);
+
+        handoff.RestoreLook(Red);
+        Assert.Null(handoff.PeekLook());
+        Assert.Same(Red, handoff.LastLook);
+        handoff.RestoreLook(Blue);
+        Assert.Same(Red, handoff.LastLook);
+
+        Assert.True(handoff.OfferLastLook());
+        Assert.Same(Red, handoff.PeekLook());
+    }
+
+    [Fact]
+    public void NullLooks_AreRejected() {
+        var handoff = new CoolerHandoff(_clock);
+        Assert.Throws<ArgumentNullException>(() => handoff.OfferLook(null!));
+        Assert.Throws<ArgumentNullException>(() => handoff.RestoreLook(null!));
+    }
+#endif
 }
