@@ -161,6 +161,22 @@ public class LianLiPluginSpaceDeckTests {
     }
 
     [Fact]
+    public void ASecondLoad_ReplacesTheScreenClient() {
+        _pipe.ConfigureReader = reader => reader.BlockWhenEmpty = true;
+        using LianLiPlugin plugin = NewPlugin(new FakeEnumerator(new LocatedDevice(0x0416, 0x7391, "fake/vision", null)));
+        plugin.Initialize();
+        plugin.Load(new FakeSensorsContainer());
+        Assert.True(SpinWait.SpinUntil(() => _pipe.Readers.Count == 1, TimeSpan.FromSeconds(10)));
+
+        plugin.Load(new FakeSensorsContainer());
+
+        Assert.True(_pipe.Readers[0].Disposed);
+        Assert.True(SpinWait.SpinUntil(() => _pipe.Readers.Count == 2, TimeSpan.FromSeconds(10)));
+        plugin.Close();
+        Assert.True(_pipe.Readers[1].Disposed);
+    }
+
+    [Fact]
     public void Initialize_StopsThePublisherOfTheLastLoad() {
         using LianLiPlugin plugin = NewPlugin(new FakeEnumerator(Sli(0)));
         plugin.Initialize();
