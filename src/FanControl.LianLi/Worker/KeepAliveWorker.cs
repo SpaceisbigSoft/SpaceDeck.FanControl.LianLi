@@ -9,7 +9,7 @@ namespace FanControl.LianLi.Worker;
 /// <summary>
 /// Owns the controller set and drives all of its I/O, one <see cref="ControllerLoop"/> per
 /// controller, each on its own thread, so a controller stalled in a device call delays nothing
-/// but itself. Each ticks once a second, and at once when <see cref="Wake"/> says a target
+/// but itself. Each ticks once a second, and at once when <see cref="Wake()"/> says a target
 /// changed. FanControl's own thread never ticks: the host calls the plugin's Update holding the
 /// lock that serialises every device it drives, so a device call there, bounded or not, would stall
 /// all of FanControl. <see cref="Dispose"/> waits a bounded time for all the loops together and
