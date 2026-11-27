@@ -58,6 +58,28 @@ internal static class SpaceDeckText {
         return IsBlank(cleaned) ? Clean(fallback) : cleaned;
     }
 
+    /// <summary>
+    /// Whether <paramref name="id"/> is already a valid id, 1 to <see cref="MaximumIdLength"/>
+    /// characters of the id set, as the collector checks the ids it sends back on its screen pipe.
+    /// </summary>
+    public static bool IsValidId(string id) {
+        if (id is null) {
+            throw new ArgumentNullException(nameof(id));
+        }
+
+        if (id.Length == 0 || id.Length > MaximumIdLength) {
+            return false;
+        }
+
+        foreach (char c in id) {
+            if (!IsIdCharacter(c)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static bool IsIdCharacter(char c)
         => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
             || c == '/' || c == '.' || c == '_' || c == ':' || c == '-';

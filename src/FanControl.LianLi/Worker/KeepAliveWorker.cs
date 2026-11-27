@@ -9,7 +9,7 @@ namespace FanControl.LianLi.Worker;
 /// <summary>
 /// Owns the controller set and drives all of its I/O, one <see cref="ControllerLoop"/> per
 /// controller, each on its own thread, so a controller stalled in a device call delays nothing
-/// but itself. Each ticks once a second, and at once when <see cref="Wake"/> says a target
+/// but itself. Each ticks once a second, and at once when <see cref="Wake()"/> says a target
 /// changed. FanControl's own thread never ticks: the host calls the plugin's Update holding the
 /// lock that serialises every device it drives, so a device call there, bounded or not, would stall
 /// all of FanControl. <see cref="Dispose"/> waits a bounded time for all the loops together and
@@ -72,6 +72,19 @@ internal sealed class KeepAliveWorker : IDisposable {
     public void Wake() {
         foreach (ControllerLoop loop in _loops) {
             loop.Wake();
+        }
+    }
+
+    /// <summary>
+    /// Tick only the loop that drives <paramref name="controller"/> now: something was handed to that
+    /// controller alone (a cooler's screen frame), and the others have nothing to do. Safe from any
+    /// thread until <see cref="Dispose"/> is called; a controller this worker does not drive wakes nothing.
+    /// </summary>
+    public void Wake(IFanDevice controller) {
+        foreach (ControllerLoop loop in _loops) {
+            if (loop.Drives(controller)) {
+                loop.Wake();
+            }
         }
     }
 

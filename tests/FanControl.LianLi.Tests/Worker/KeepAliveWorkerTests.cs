@@ -90,6 +90,27 @@ public class KeepAliveWorkerTests {
     }
 
     [Fact]
+    public void WakeAController_TicksOnlyItsLoop() {
+        var logger = new FakeLogger();
+        var woken = new FakeDeviceTransport();
+        var other = new FakeDeviceTransport();
+        FanController target = NewController(0, woken, logger);
+        using var worker = new KeepAliveWorker(new[] { target, NewController(1, other, logger) }, logger, tickIntervalMs: 600_000);
+        worker.Start();
+        Assert.True(
+            SpinWait.SpinUntil(() => woken.ReadCount >= 1 && other.ReadCount >= 1, TimeSpan.FromSeconds(5)),
+            "the worker never ran its first ticks");
+
+        worker.Wake(NewController(2, new FakeDeviceTransport(), logger));
+        worker.Wake(target);
+
+        Assert.True(
+            SpinWait.SpinUntil(() => woken.ReadCount >= 2, TimeSpan.FromSeconds(5)),
+            "the wake did not bring the controller's next tick forward");
+        Assert.Equal(1, other.ReadCount);
+    }
+
+    [Fact]
     public void Wake_AfterDispose_IsANoOp() {
         var worker = new KeepAliveWorker(new[] { NewController(0, new FakeDeviceTransport(), new FakeLogger()) }, new FakeLogger());
         worker.Dispose();

@@ -64,6 +64,42 @@ public class LianLiPluginSpaceDeckTests {
         Assert.Equal(4, container.ControlSensors.Count);
     }
 
+    // A Galahad II Vision LCD: its catalog entry has the screen, the screen pipe is read, and a frame
+    // the collector sends wakes the cooler's loop, which sends it as SendJpeg packets.
+    [Fact]
+    public void AVisionLcd_IsListedWithItsScreen_AndAFrameFromTheScreenPipeReachesIt() {
+        byte[] jpeg = ScreenMessage.Jpeg(1500);
+        _pipe.ConfigureReader = reader => {
+            reader.Send(ScreenMessage.Build("LianLi/0", jpeg));
+            reader.BlockWhenEmpty = true;
+        };
+        var vision = new LocatedDevice(0x0416, 0x7395, "fake/0-vision", null);
+        var trinity = new LocatedDevice(0x0416, 0x7371, "fake/1-trinity", null);
+        var enumerator = new FakeEnumerator(vision, trinity);
+        using LianLiPlugin plugin = NewPlugin(enumerator);
+        plugin.Initialize();
+        plugin.Load(new FakeSensorsContainer());
+        plugin.Update();
+        FakeNamedPipeConnection connection = AwaitConnection(0);
+        FakeDeviceTransport cooler = enumerator.TransportFor("fake/0-vision");
+
+        Assert.True(
+            SpinWait.SpinUntil(() => cooler.SnapshotTransfers().Any(t => t.Value[0] == 0x02 && t.Value[1] == 0x0E), TimeSpan.FromSeconds(10)),
+            "the frame was not sent to the cooler");
+        Assert.True(SpinWait.SpinUntil(() => connection.Lines.Count >= 2, TimeSpan.FromSeconds(10)));
+        Assert.Contains(
+            "{\"id\":\"LianLi/0\",\"name\":\"Lian Li GA II LCD\",\"kind\":\"cooler\",\"screen\":{\"width\":480,\"height\":480,\"format\":\"jpeg\"}}",
+            connection.Lines[1],
+            StringComparison.Ordinal);
+        Assert.Contains("{\"id\":\"LianLi/1\",\"name\":\"Lian Li Galahad #2\",\"kind\":\"cooler\"}", connection.Lines[1], StringComparison.Ordinal);
+        Assert.Equal(new[] { "SpaceDeck.Screen" }, _pipe.ReadAttempts);
+        Assert.DoesNotContain(enumerator.TransportFor("fake/1-trinity").SnapshotTransfers(), t => t.Value[0] == 0x02);
+
+        plugin.Close();
+
+        Assert.True(Assert.Single(_pipe.Readers).Disposed);
+    }
+
     [Fact]
     public void NothingRegistered_PublishesNothing() {
         using LianLiPlugin plugin = NewPlugin(new FakeEnumerator());
@@ -122,6 +158,22 @@ public class LianLiPluginSpaceDeckTests {
         Assert.True(first.Disposed);
         Assert.False(AwaitConnection(1).Disposed);
         plugin.Close();
+    }
+
+    [Fact]
+    public void ASecondLoad_ReplacesTheScreenClient() {
+        _pipe.ConfigureReader = reader => reader.BlockWhenEmpty = true;
+        using LianLiPlugin plugin = NewPlugin(new FakeEnumerator(new LocatedDevice(0x0416, 0x7391, "fake/vision", null)));
+        plugin.Initialize();
+        plugin.Load(new FakeSensorsContainer());
+        Assert.True(SpinWait.SpinUntil(() => _pipe.Readers.Count == 1, TimeSpan.FromSeconds(10)));
+
+        plugin.Load(new FakeSensorsContainer());
+
+        Assert.True(_pipe.Readers[0].Disposed);
+        Assert.True(SpinWait.SpinUntil(() => _pipe.Readers.Count == 2, TimeSpan.FromSeconds(10)));
+        plugin.Close();
+        Assert.True(_pipe.Readers[1].Disposed);
     }
 
     [Fact]

@@ -54,6 +54,16 @@ internal static class SpaceDeckPipeEncoder {
             AppendString(builder, hardware[i].Name);
             builder.Append(",\"kind\":");
             AppendString(builder, hardware[i].Kind);
+            if (hardware[i].Screen is SpaceDeckScreen screen) {
+                builder.Append(",\"screen\":{\"width\":");
+                builder.Append(screen.Width.ToString(CultureInfo.InvariantCulture));
+                builder.Append(",\"height\":");
+                builder.Append(screen.Height.ToString(CultureInfo.InvariantCulture));
+                builder.Append(",\"format\":");
+                AppendString(builder, screen.Format);
+                builder.Append('}');
+            }
+
             builder.Append('}');
         }
 

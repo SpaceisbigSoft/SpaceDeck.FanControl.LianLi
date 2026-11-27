@@ -34,14 +34,27 @@ internal sealed class SpaceDeckReadings {
     public SpaceDeckCatalog Catalog { get; }
 
     /// <summary>The readings of every sensor <paramref name="container"/> holds, grouped into devices.</summary>
-    public static SpaceDeckReadings From(IPluginSensorsContainer container, ILog log) {
+    public static SpaceDeckReadings From(IPluginSensorsContainer container, ILog log)
+        => From(container, Array.Empty<string>(), log);
+
+    /// <summary>
+    /// The readings of every sensor <paramref name="container"/> holds, grouped into devices, with
+    /// the Galahad II Vision LCD's screen on each device whose id is in <paramref name="screens"/>.
+    /// </summary>
+    public static SpaceDeckReadings From(IPluginSensorsContainer container, IEnumerable<string> screens, ILog log) {
         if (container is null) {
             throw new ArgumentNullException(nameof(container));
+        }
+
+        if (screens is null) {
+            throw new ArgumentNullException(nameof(screens));
         }
 
         if (log is null) {
             throw new ArgumentNullException(nameof(log));
         }
+
+        var withScreen = new HashSet<string>(screens, StringComparer.Ordinal);
 
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var groups = new List<Group>();
@@ -94,7 +107,10 @@ internal sealed class SpaceDeckReadings {
 
             string name = SpaceDeckDeviceGrouping.HardwareNameOf(names);
             hardware.Add(new SpaceDeckHardware(
-                group.Id, SpaceDeckText.Name(name, group.Id), SpaceDeckDeviceGrouping.KindOf(name, reportsTemperature)));
+                group.Id,
+                SpaceDeckText.Name(name, group.Id),
+                SpaceDeckDeviceGrouping.KindOf(name, reportsTemperature),
+                withScreen.Contains(group.Id) ? SpaceDeckScreen.Galahad2Lcd : null));
             foreach (Member member in group.Members) {
                 sensors.Add(new SpaceDeckSensor(member.Id, group.Id, SpaceDeckText.Name(member.Name, member.Id), member.Kind));
                 sources.Add(member.Sensor);

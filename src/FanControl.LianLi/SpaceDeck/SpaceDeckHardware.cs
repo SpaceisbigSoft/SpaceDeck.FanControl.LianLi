@@ -14,10 +14,16 @@ internal sealed class SpaceDeckHardware {
     public const string FansKind = "fans";
 
     /// <summary>Create the entry. Every string is required and already valid for the pipe.</summary>
-    public SpaceDeckHardware(string id, string name, string kind) {
+    public SpaceDeckHardware(string id, string name, string kind)
+        : this(id, name, kind, null) {
+    }
+
+    /// <summary>Create the entry for a device with <paramref name="screen"/>, or none when null.</summary>
+    public SpaceDeckHardware(string id, string name, string kind, SpaceDeckScreen? screen) {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Kind = kind ?? throw new ArgumentNullException(nameof(kind));
+        Screen = screen;
     }
 
     /// <summary>The id the device's sensors share, such as <c>LianLi/1</c>.</summary>
@@ -28,4 +34,7 @@ internal sealed class SpaceDeckHardware {
 
     /// <summary><see cref="CoolerKind"/> or <see cref="FansKind"/>.</summary>
     public string Kind { get; }
+
+    /// <summary>The screen SpaceDeck may send frames to on the screen pipe, or null for a device without one.</summary>
+    public SpaceDeckScreen? Screen { get; }
 }

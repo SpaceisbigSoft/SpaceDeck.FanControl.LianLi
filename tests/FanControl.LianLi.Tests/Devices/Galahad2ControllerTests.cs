@@ -659,4 +659,392 @@ public class Galahad2ControllerTests {
         controller.ApplyPending();
         Assert.Empty(transport.Writes);
     }
+
+    // ---------- screen frames ----------
+
+    private static (Galahad2Controller controller, FakeDeviceTransport transport, FakeClock clock, CoolerHandoff handoff, FakeLogger logger) NewScreen() {
+        var transport = new FakeDeviceTransport();
+        var clock = new FakeClock();
+        var handoff = new CoolerHandoff(clock);
+        var logger = new FakeLogger();
+        var controller = new Galahad2Controller(0, transport, 0x7395, clock, logger, handoff);
+        return (controller, transport, clock, handoff, logger);
+    }
+
+    private static byte[] Jpeg(int length) {
+        var jpeg = new byte[length];
+        jpeg[0] = 0xFF;
+        jpeg[1] = 0xD8;
+        jpeg[length - 2] = 0xFF;
+        jpeg[length - 1] = 0xD9;
+        return jpeg;
+    }
+
+    private static List<byte[]> BPackets(FakeDeviceTransport transport) => transport.Writes.Where(w => w[0] == 0x02).ToList();
+
+    [Fact]
+    public void ApplyPending_SendsTheWaitingFrame_AfterTheDuties_AsSendJpegPackets_AndNeverAgain() {
+        var (controller, transport, _, handoff, logger) = NewScreen();
+        byte[] jpeg = Jpeg(2100);
+        handoff.OfferFrame(jpeg);
+
+        controller.ApplyPending();
+
+        Assert.Equal(Galahad2Protocol.EncodeFollowMotherboardPump(), transport.Writes[0]);
+        Assert.Equal(Galahad2ScreenEncoder.EncodeJpeg(jpeg), transport.Writes.Skip(1).ToList());
+        Assert.Single(logger.Messages, m => m == "G0: showing SpaceDeck's screen frames (2100 bytes in 3 packets)");
+
+        transport.Clear();
+        controller.ApplyPending();
+        Assert.Empty(transport.Writes);
+    }
+
+    [Fact]
+    public void ThreeFramesGoOutOneAfterAnother_OnePerTick_AndAFourthWaitsForTheBucketToRefill() {
+        Assert.Equal(30, Galahad2Controller.MostFramesPerSecond);
+        Assert.Equal(3, Galahad2Controller.FrameBurst);
+        var (controller, transport, clock, handoff, logger) = NewScreen();
+        for (int i = 1; i <= 3; i++) {
+            handoff.OfferFrame(Jpeg(10 * i));
+            controller.ApplyPending();
+            Assert.Equal(10 * i, Assert.Single(BPackets(transport))[10]);
+            transport.Clear();
+        }
+
+        // The bucket is empty, and refills a frame each thirtieth of a second, 33.3 ms: 33 ms is too
+        // soon, 34 ms is not.
+        handoff.OfferFrame(Jpeg(40));
+        controller.ApplyPending();
+        Assert.Empty(BPackets(transport));
+        clock.Advance(TimeSpan.FromMilliseconds(33));
+        controller.ApplyPending();
+        Assert.Empty(BPackets(transport));
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        controller.ApplyPending();
+        Assert.Equal(40, Assert.Single(BPackets(transport))[10]);
+        Assert.Single(logger.Messages, m => m.Contains("screen frames"));
+    }
+
+    [Fact]
+    public void AFrame_AfterTheClockSteppedBack_IsNotHeldBack() {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        for (int i = 0; i < Galahad2Controller.FrameBurst; i++) {
+            handoff.OfferFrame(Jpeg(10));
+            controller.ApplyPending();
+        }
+
+        Assert.Equal(3, BPackets(transport).Count);
+        transport.Clear();
+
+        clock.Advance(TimeSpan.FromSeconds(-1));
+        handoff.OfferFrame(Jpeg(20));
+        controller.ApplyPending();
+
+        Assert.Single(BPackets(transport));
+    }
+
+    [Fact]
+    public void AFrame_WaitsWhileTheCoolerIsOffTheBus() {
+        var (controller, transport, _, handoff, _) = NewScreen();
+        transport.IsFaulted = true;
+        handoff.OfferFrame(Jpeg(10));
+
+        controller.ApplyPending();
+        Assert.Empty(BPackets(transport));
+
+        transport.IsFaulted = false;
+        controller.ApplyPending();
+        Assert.Single(BPackets(transport));
+    }
+
+    [Fact]
+    public void AFrameThatCannotBeWritten_CostsOnlyThatFrame_AndIsLoggedOnceUntilOneIsSent() {
+        var (controller, transport, clock, handoff, logger) = NewScreen();
+        transport.FailWrite = report => report[0] == 0x02;
+        controller.SetTarget(FanChannel, 40);
+
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+
+        Assert.Equal(2, transport.Writes.Count); // the fan and the pump, nothing of either frame
+        Assert.Single(logger.Messages, m => m == "G0: a screen frame could not be sent, so it was dropped (logged once until one is sent): simulated device write failure");
+        Assert.Null(handoff.TakeFrame());
+
+        transport.FailWrite = null;
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+
+        Assert.Equal(2, BPackets(transport).Count);
+        Assert.Single(logger.Messages, m => m == "G0: screen frames are sent again (10 bytes in 1 packets)");
+        Assert.DoesNotContain(logger.Messages, m => m.StartsWith("G0: showing", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ACoolerWithAHandoff_PollsItsStatusAtMostEveryHalfSecond() {
+        var (controller, transport, clock, _, _) = NewScreen();
+        transport.ReplyFor = _ => VisionHandshakeReply(1200, 2700, 1, 31, 5);
+
+        controller.PollRpm();
+        controller.PollRpm();
+        Assert.Single(transport.Writes);
+
+        clock.Advance(TimeSpan.FromMilliseconds(500));
+        controller.PollRpm();
+        Assert.Equal(2, transport.Writes.Count);
+
+        clock.Advance(TimeSpan.FromSeconds(-5));
+        controller.PollRpm();
+        Assert.Equal(3, transport.Writes.Count);
+        Assert.Equal(31.5f, controller.GetTemperature(0));
+    }
+
+    [Fact]
+    public void FramesAtThirtyASecond_AreAllSent_WhileTheStatusIsPolledAtMostEveryHalfSecond_AndTheDutiesKeepTheirSchedule() {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        transport.ReplyFor = _ => VisionHandshakeReply(1200, 2700, 1, 31, 5);
+        byte[] handshake = Galahad2Protocol.EncodeHandshakeRequest();
+        byte[] pump = Galahad2Protocol.EncodeFollowMotherboardPump();
+        byte[] fanAt40 = Galahad2Protocol.EncodeSetFan(motherboardSync: false, dutyPercent: 40);
+        byte[] fanAt60 = Galahad2Protocol.EncodeSetFan(motherboardSync: false, dutyPercent: 60);
+        int frames = 0;
+        var handshakes = new List<int>();
+        var fanWrites = new List<int>();
+        var pumpWrites = new List<int>();
+        controller.SetTarget(FanChannel, 40);
+
+        // Twenty seconds of a frame every thirtieth of a second, each woken tick as the worker runs it.
+        for (int i = 0; i < 600; i++) {
+            if (i == 300) {
+                controller.SetTarget(FanChannel, 60);
+            }
+
+            handoff.OfferFrame(Jpeg(10));
+            controller.ApplyPending();
+            controller.PollRpm();
+
+            // A duty due on a tick is that tick's first write: a frame never goes ahead of it.
+            if (i == 300) {
+                Assert.Equal(fanAt60, transport.Writes[0]);
+            } else if (i == 451) {
+                Assert.Equal(pump, transport.Writes[0]);
+            }
+
+            frames += BPackets(transport).Count;
+            handshakes.AddRange(transport.Writes.Where(w => w.SequenceEqual(handshake)).Select(_ => i));
+            fanWrites.AddRange(transport.Writes.Where(w => w.SequenceEqual(fanAt40) || w.SequenceEqual(fanAt60)).Select(_ => i));
+            pumpWrites.AddRange(transport.Writes.Where(w => w.SequenceEqual(pump)).Select(_ => i));
+            transport.Clear();
+            clock.Advance(TimeSpan.FromTicks(TimeSpan.TicksPerSecond / 30));
+        }
+
+        Assert.Equal(600, frames);
+        Assert.Equal(0, handoff.TakeDroppedFrames());
+
+        // Half a second is fifteen thirtieths, and the sixteenth tick is the first past it.
+        Assert.Equal(Enumerable.Range(0, 38).Select(n => n * 16), handshakes);
+
+        // The fan at the start and on the change, at once; the pump's command at the start and on
+        // the fifteen-second keepalive, on the first tick past it.
+        Assert.Equal(new[] { 0, 300 }, fanWrites);
+        Assert.Equal(new[] { 0, 451 }, pumpWrites);
+    }
+
+    // Frame times from one second on at framesPerSecond, each early or late by up to 16 ms - a
+    // Windows timer tick and more, as the collector's writes reach the plugin: alternately 16 ms early
+    // and late, or spread over -16..+16 ms; never before the frame ahead of it.
+    private static List<TimeSpan> JitteredFrames(int framesPerSecond, bool alternating) {
+        var times = new List<TimeSpan>();
+        for (int i = 0; i < 600; i++) {
+            int jitterMs = alternating ? (i % 2 == 0 ? -16 : 16) : ((i * 13) % 33) - 16;
+            var at = TimeSpan.FromTicks(TimeSpan.TicksPerSecond + (i * TimeSpan.TicksPerSecond / framesPerSecond) + (jitterMs * TimeSpan.TicksPerMillisecond));
+            times.Add(times.Count == 0 || at > times[^1] ? at : times[^1]);
+        }
+
+        return times;
+    }
+
+    // Each frame offered at its time and its woken tick run as the worker runs it: the frames sent,
+    // the ticks the status was asked for on, and the frames dropped unsent.
+    private static (int Sent, List<TimeSpan> Handshakes, int Dropped) RunFrames(List<TimeSpan> times) {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        transport.ReplyFor = _ => VisionHandshakeReply(1200, 2700, 1, 31, 5);
+        byte[] handshake = Galahad2Protocol.EncodeHandshakeRequest();
+        DateTime start = clock.UtcNow;
+        TimeSpan now = TimeSpan.Zero;
+        int sent = 0;
+        var handshakes = new List<TimeSpan>();
+        foreach (TimeSpan at in times) {
+            clock.Advance(at - now);
+            now = at;
+            handoff.OfferFrame(Jpeg(10));
+            controller.ApplyPending();
+            controller.PollRpm();
+            sent += BPackets(transport).Count;
+            handshakes.AddRange(transport.Writes.Where(w => w.SequenceEqual(handshake)).Select(_ => clock.UtcNow - start));
+            transport.Clear();
+        }
+
+        return (sent, handshakes, handoff.TakeDroppedFrames());
+    }
+
+    [Theory]
+    [InlineData(24, false)]
+    [InlineData(30, false)]
+    [InlineData(24, true)]
+    [InlineData(30, true)]
+    public void AJitteredStreamOfUpToThirtyFramesASecond_IsSentWhole_WhileTheStatusIsPolledAtMostEveryHalfSecond(int framesPerSecond, bool alternating) {
+        var (sent, handshakes, dropped) = RunFrames(JitteredFrames(framesPerSecond, alternating));
+
+        Assert.Equal(600, sent);
+        Assert.Equal(0, dropped);
+        Assert.All(handshakes.Zip(handshakes.Skip(1), (earlier, later) => later - earlier), gap => Assert.True(gap >= TimeSpan.FromMilliseconds(500)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SixtyFramesASecond_AreHeldToThirty_TheNewestWaiting(bool alternating) {
+        var (sent, _, dropped) = RunFrames(JitteredFrames(60, alternating));
+
+        // Ten seconds at thirty a second, and the bucket's three at the start; every other frame was
+        // replaced by a newer one before a token came.
+        Assert.InRange(sent, 300, 303);
+        Assert.InRange(sent + dropped, 599, 600);
+    }
+
+    [Fact]
+    public void OnceAMinuteWhileFramesAreSent_OneLineSaysWhatTheyCost() {
+        var (controller, transport, clock, handoff, logger) = NewScreen();
+        transport.OnWrite = report => {
+            if (report[0] == 0x02) {
+                clock.Advance(TimeSpan.FromMilliseconds(5));
+            }
+        };
+
+        // A frame of two packets each second, and one replaced before it could be sent.
+        for (int second = 0; second < 60; second++) {
+            handoff.OfferFrame(Jpeg(1500));
+            if (second == 10) {
+                handoff.OfferFrame(Jpeg(1500));
+            }
+
+            controller.ApplyPending();
+            Assert.DoesNotContain(logger.Messages, m => m.Contains("in the last minute"));
+            clock.Advance(TimeSpan.FromSeconds(1) - TimeSpan.FromMilliseconds(10));
+        }
+
+        controller.ApplyPending();
+
+        Assert.Single(
+            logger.Messages,
+            m => m == "G0: screen frames in the last minute: 60 sent, 1 dropped before sending (replaced by a newer one or expired), 10.0 ms average and 10.0 ms longest to write one, 1500 bytes average");
+
+        // Nothing more is sent, so nothing more is logged.
+        clock.Advance(TimeSpan.FromMinutes(5));
+        controller.ApplyPending();
+        Assert.Single(logger.Messages, m => m.Contains("in the last minute"));
+    }
+#if ENABLE_LIGHTING
+
+    // ---------- the screen ring, through OpenRGB ----------
+
+    private static Galahad2RingLook Effect(int speed) => new Galahad2RingLook(Galahad2RingMode.Breathing, speed, 4, 0, new[] { new RgbColor(9, 8, 7) });
+
+    private static List<byte[]> RingWrites(FakeDeviceTransport transport)
+        => transport.Writes.Where(w => (w[0] == 0x02 && w[1] == 0x14) || (w[0] == 0x01 && w[1] == 0x83)).ToList();
+
+    [Fact]
+    public void ADirectLook_IsSentAfterTheFrame_AtMostTenTimesASecond_TheNewestWinning() {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        handoff.OfferFrame(Jpeg(10));
+        handoff.OfferLook(Galahad2RingLook.DirectOf(new RgbColor(1, 0, 0)));
+        controller.ApplyPending();
+
+        Assert.Equal(0x0E, transport.Writes[1][1]);
+        Assert.Equal(Galahad2RingEncoder.Encode(Galahad2RingLook.DirectOf(new RgbColor(1, 0, 0))), transport.Writes.Skip(2).ToList());
+
+        transport.Clear();
+        handoff.OfferLook(Galahad2RingLook.DirectOf(new RgbColor(2, 0, 0)));
+        Galahad2RingLook newest = Galahad2RingLook.DirectOf(new RgbColor(3, 0, 0));
+        handoff.OfferLook(newest);
+        clock.Advance(TimeSpan.FromMilliseconds(99));
+        controller.ApplyPending();
+        Assert.Empty(RingWrites(transport));
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        controller.ApplyPending();
+        Assert.Equal(Galahad2RingEncoder.Encode(newest), RingWrites(transport));
+        Assert.Null(handoff.PeekLook());
+    }
+
+    [Fact]
+    public void AnEffect_IsSentAsOne0x83_AtLeastASecondAfterTheLast_ButADirectLookNeedNotWaitForIt() {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        handoff.OfferLook(Effect(1));
+        controller.ApplyPending();
+        Assert.Single(RingWrites(transport));
+        transport.Clear();
+
+        handoff.OfferLook(Effect(2));
+        clock.Advance(TimeSpan.FromMilliseconds(999));
+        controller.ApplyPending();
+        Assert.Empty(RingWrites(transport));
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        controller.ApplyPending();
+        Assert.Equal(Galahad2RingEncoder.Encode(Effect(2)), RingWrites(transport));
+
+        transport.Clear();
+        handoff.OfferLook(Galahad2RingLook.DirectOf(new RgbColor(5, 5, 5)));
+        controller.ApplyPending();
+        Assert.Single(RingWrites(transport));
+    }
+
+    [Fact]
+    public void ALook_WaitsWhileTheCoolerIsOffTheBus() {
+        var (controller, transport, _, handoff, _) = NewScreen();
+        transport.IsFaulted = true;
+        handoff.OfferLook(Effect(1));
+
+        controller.ApplyPending();
+        Assert.Empty(RingWrites(transport));
+
+        transport.IsFaulted = false;
+        controller.ApplyPending();
+        Assert.Single(RingWrites(transport));
+    }
+
+    [Fact]
+    public void ALookThatCannotBeWritten_CostsOnlyThatLook_AndIsLoggedOnceUntilOneIsSent() {
+        var (controller, transport, clock, handoff, logger) = NewScreen();
+        transport.FailWrite = report => report[1] == 0x83;
+        handoff.OfferLook(Effect(1));
+        controller.ApplyPending();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferLook(Effect(2));
+        controller.ApplyPending();
+
+        Assert.Single(logger.Messages, m => m == "G0: the screen ring's Breathing look could not be sent (logged once until one is sent): simulated device write failure");
+        Assert.Null(handoff.PeekLook());
+
+        transport.FailWrite = null;
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferLook(Effect(3));
+        controller.ApplyPending();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferLook(Effect(4));
+        controller.ApplyPending();
+
+        Assert.Equal(2, RingWrites(transport).Count);
+        Assert.Single(logger.Messages, m => m == "G0: the screen ring's looks are sent again");
+    }
+#endif
 }

@@ -129,6 +129,14 @@ public sealed class Galahad2ProtocolTests {
     public void ReportsCoolant_OnlyTheVisionLcd(int productId, bool expected)
         => Assert.Equal(expected, Galahad2Protocol.ReportsCoolant(productId));
 
+    [Theory]
+    [InlineData(0x7391, true)]  // Galahad II Vision LCD
+    [InlineData(0x7395, true)]  // Galahad II Vision LCD (alternate pid)
+    [InlineData(0x7371, false)] // Galahad II Trinity (performance)
+    [InlineData(0x7398, false)] // HydroShift LCD
+    public void HasScreen_OnlyTheVisionLcd(int productId, bool expected)
+        => Assert.Equal(expected, Galahad2Protocol.HasScreen(productId));
+
     // Galahad2TrinityDevice.GetHandshakeInfo and Galahad2VisionDevice.ReadACommandPacket take a packet
     // as RPM only when it is a frame echoing 0x81.
     [Fact]
