@@ -57,7 +57,7 @@ public class OpenRgbRingModeTests {
     [Fact]
     public void IndexOf_FindsTheModeOfEachLook() {
         for (int i = 0; i < OpenRgbRingMode.All.Count - 1; i++) {
-            Assert.Equal(i, OpenRgbRingMode.IndexOf(OpenRgbRingMode.All[i].RingMode.Value));
+            Assert.Equal(i, OpenRgbRingMode.IndexOf(Assert.NotNull(OpenRgbRingMode.All[i].RingMode)));
         }
 
         Assert.Throws<ArgumentOutOfRangeException>(() => OpenRgbRingMode.IndexOf((Galahad2RingMode)99));
