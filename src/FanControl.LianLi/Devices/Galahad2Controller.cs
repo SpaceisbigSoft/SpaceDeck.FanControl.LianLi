@@ -487,8 +487,15 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     // direct look as 0x14, at most ten a second, an effect as 0x83, at least a second apart. One that
     // is not due yet stays waiting, and a newer one replaces it there, so the ring always ends on the
     // newest. Like a frame, it waits while the cooler is off the bus, and a write that fails costs only
-    // that look and is logged once until one is sent again.
+    // that look and is logged once until one is sent again. A ring handed back to L-Connect has its
+    // look replayed as after a reconnect - by the next tick's replay, which the Lighting build
+    // registered and which shows L-Connect's look now that the handoff holds none of OpenRGB's.
     private void SendRingLook() {
+        if (_handoff is not null && _handoff.TakeHandBack()) {
+            _reconnectReplay.Owe();
+            _log.Write(string.Format(CultureInfo.InvariantCulture, "G{0}: the screen ring is handed back to L-Connect's look", _index));
+        }
+
         if (_handoff is null || _transport.IsFaulted || _handoff.PeekLook() is not Galahad2RingLook look) {
             return;
         }

@@ -145,6 +145,39 @@ public sealed class OpenRgbLookFileTests : IDisposable {
     }
 
     [Fact]
+    public void Remove_ForgetsOneCoolersLook_AndKeepsTheOthers() {
+        Looks().Save("LianLi/0", Galahad2RingLook.DirectOf(Red), _log);
+        Looks().Save("LianLi/2", Galahad2RingLook.DirectOf(Red), _log);
+
+        Looks().Remove("LianLi/0", _log);
+
+        Assert.Equal(new[] { "LianLi/2" }, Looks().Load(_log).Keys);
+        Assert.Contains(
+            "OpenRGB: the screen ring's look for LianLi/0 is forgotten, so L-Connect's is replayed at the next start: " + Looks().FilePath,
+            _log.Messages);
+        Assert.Equal(new[] { Looks().FilePath }, Directory.GetFiles(_directory));
+    }
+
+    [Fact]
+    public void Remove_OfACoolerWithNoSavedLook_WritesNothing() {
+        Looks().Remove("LianLi/0", _log);
+
+        Assert.False(File.Exists(Looks().FilePath));
+        Assert.Equal(new[] { "OpenRGB: no screen ring look was saved for LianLi/0; L-Connect's look is replayed at the next start" }, _log.Messages);
+    }
+
+    [Fact]
+    public void ARemoveThatCannotWrite_IsLogged() {
+        Looks().Save("LianLi/0", Galahad2RingLook.DirectOf(Red), _log);
+        Directory.CreateDirectory(Looks().FilePath + ".tmp"); // the temporary file cannot be written where a folder is
+
+        Looks().Remove("LianLi/0", _log);
+
+        Assert.Contains(_log.Messages, m => m.StartsWith("OpenRGB: the screen ring's look for LianLi/0 could not be forgotten in ", StringComparison.Ordinal));
+        Assert.Equal(new[] { "LianLi/0" }, Looks().Load(_log).Keys);
+    }
+
+    [Fact]
     public void Machine_IsBesideThePluginLog()
         => Assert.Equal(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FanControl.LianLi", "openrgb-looks.json"),
@@ -157,6 +190,8 @@ public sealed class OpenRgbLookFileTests : IDisposable {
         Assert.Throws<ArgumentNullException>(() => Looks().Save(null!, Galahad2RingLook.DirectOf(Red), _log));
         Assert.Throws<ArgumentNullException>(() => Looks().Save("a", null!, _log));
         Assert.Throws<ArgumentNullException>(() => Looks().Save("a", Galahad2RingLook.DirectOf(Red), null!));
+        Assert.Throws<ArgumentNullException>(() => Looks().Remove(null!, _log));
+        Assert.Throws<ArgumentNullException>(() => Looks().Remove("a", null!));
     }
 }
 #endif

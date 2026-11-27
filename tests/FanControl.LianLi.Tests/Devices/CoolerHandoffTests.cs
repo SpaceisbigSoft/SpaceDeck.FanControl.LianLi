@@ -140,6 +140,37 @@ public class CoolerHandoffTests {
     }
 
     [Fact]
+    public void HandingBackToLConnect_ForgetsTheLooks_WakesTheLoop_AndIsTakenOnce() {
+        var handoff = new CoolerHandoff(_clock);
+        int wakes = 0;
+        handoff.WakeWith(() => wakes++);
+        Assert.False(handoff.TakeHandBack());
+        handoff.OfferLook(Red);
+
+        handoff.HandBackToLConnect();
+
+        Assert.Null(handoff.PeekLook());
+        Assert.Null(handoff.LastLook);
+        Assert.False(handoff.OfferLastLook());
+        Assert.Equal(2, wakes);
+        Assert.True(handoff.TakeHandBack());
+        Assert.False(handoff.TakeHandBack());
+    }
+
+    [Fact]
+    public void ARestoredLook_IsNotKept_AfterAHandBack_UntilANewLookIsOffered() {
+        var handoff = new CoolerHandoff(_clock);
+        handoff.HandBackToLConnect();
+
+        handoff.RestoreLook(Red);
+        Assert.Null(handoff.LastLook);
+
+        handoff.OfferLook(Blue);
+        Assert.False(handoff.TakeHandBack()); // a look offered since replaces the hand-back still waiting
+        Assert.Same(Blue, handoff.LastLook);
+    }
+
+    [Fact]
     public void NullLooks_AreRejected() {
         var handoff = new CoolerHandoff(_clock);
         Assert.Throws<ArgumentNullException>(() => handoff.OfferLook(null!));

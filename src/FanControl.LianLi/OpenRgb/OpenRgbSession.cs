@@ -12,8 +12,8 @@ namespace FanControl.LianLi.OpenRgb;
 /// sent in, the packets to send back out. It keeps the protocol version the two agreed on (the lower of
 /// the client's and <see cref="OpenRgbProtocol.MaximumVersion"/>; 0 until the client asks) and the name
 /// the client gave. Requests are answered, commands go to the ring they name, SAVEMODE also keeps the
-/// look in the saved looks' file, and a packet id the server does not know is ignored, as OpenRGB's own
-/// server ignores one. A packet that names a controller the server does not have, or that does not
+/// look in the saved looks' file (or, for the L-Connect mode, forgets it), and a packet id the server
+/// does not know is ignored, as OpenRGB's own server ignores one. A packet that names a controller the server does not have, or that does not
 /// decode, throws a <see cref="FormatException"/>: the client is not one to keep talking to.
 /// </summary>
 internal sealed class OpenRgbSession {
@@ -96,9 +96,18 @@ internal sealed class OpenRgbSession {
                 OpenRgbModeSetting setting = OpenRgbCommandDecoder.Mode(payload, Version, out int index);
                 ring.SetMode(index, setting);
                 if (packetId == OpenRgbProtocol.SaveMode) {
-                    _looks.Save(ring.Id, ring.Look, _log);
+                    if (ring.Look is Galahad2RingLook look) {
+                        _looks.Save(ring.Id, look, _log);
+                    } else {
+                        _looks.Remove(ring.Id, _log);
+                    }
                 }
 
+                return Array.Empty<byte[]>();
+            case OpenRgbProtocol.UpdateZoneMode:
+                // The ring's one zone has no modes of its own (its description lists none and none
+                // active), so there is none to pick; the controller is still checked, as for every command.
+                _ = Ring(deviceIndex);
                 return Array.Empty<byte[]>();
             default:
                 return Array.Empty<byte[]>();

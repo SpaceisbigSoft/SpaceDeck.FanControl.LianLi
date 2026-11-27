@@ -62,6 +62,9 @@ internal static class OpenRgbProtocol {
     /// <summary>NET_PACKET_ID_RGBCONTROLLER_SAVEMODE.</summary>
     public const long SaveMode = 1102;
 
+    /// <summary>NET_PACKET_ID_RGBCONTROLLER_UPDATEZONEMODE (version 6): a mode of a zone's own.</summary>
+    public const long UpdateZoneMode = 1103;
+
     // "ORGB".
     private static readonly byte[] Magic = { 0x4F, 0x52, 0x47, 0x42 };
 

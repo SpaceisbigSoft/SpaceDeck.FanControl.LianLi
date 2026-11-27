@@ -12,8 +12,9 @@ namespace FanControl.LianLi.OpenRgb;
 /// and the twelve LEDs' colours. It starts from the look the cooler last showed through OpenRGB (its
 /// handoff's last look, a saved one at a start), or Direct in white when there is none. Every change
 /// that alters what the ring shows hands the new look to the cooler's worker through its
-/// <see cref="CoolerHandoff"/>, newest first, and never writes to the cooler itself. Safe from every
-/// client's thread at once.
+/// <see cref="CoolerHandoff"/>, newest first, and never writes to the cooler itself; picking the
+/// L-Connect mode hands the ring back to L-Connect's look through it instead. Safe from every client's
+/// thread at once.
 /// </summary>
 internal sealed class OpenRgbRing {
     private static readonly RgbColor White = new RgbColor(255, 255, 255);
@@ -44,11 +45,12 @@ internal sealed class OpenRgbRing {
     /// <summary>The cooler's id, <c>LianLi/{index}</c>, the controller's serial and the key its look is saved under.</summary>
     public string Id { get; }
 
-    /// <summary>What the ring shows now.</summary>
-    public Galahad2RingLook Look {
+    /// <summary>What the ring shows now; null while it is handed back to L-Connect's look.</summary>
+    public Galahad2RingLook? Look {
         get {
             lock (_gate) {
-                return _settings[_active].Look(_leds);
+                OpenRgbModeSetting active = _settings[_active];
+                return active.Mode.HandsBackToLConnect ? null : active.Look(_leds);
             }
         }
     }
@@ -60,7 +62,10 @@ internal sealed class OpenRgbRing {
         }
     }
 
-    /// <summary>Make mode <paramref name="index"/> active with <paramref name="setting"/>, and show it.</summary>
+    /// <summary>
+    /// Make mode <paramref name="index"/> active with <paramref name="setting"/>, and show it; L-Connect's
+    /// mode hands the ring back to L-Connect's look instead.
+    /// </summary>
     public void SetMode(int index, OpenRgbModeSetting setting) {
         if (index < 0 || index >= OpenRgbRingMode.All.Count) {
             throw new ArgumentOutOfRangeException(nameof(index));
@@ -77,7 +82,11 @@ internal sealed class OpenRgbRing {
         lock (_gate) {
             _active = index;
             _settings[index] = setting;
-            Show();
+            if (setting.Mode.HandsBackToLConnect) {
+                _handoff.HandBackToLConnect();
+            } else {
+                Show();
+            }
         }
     }
 

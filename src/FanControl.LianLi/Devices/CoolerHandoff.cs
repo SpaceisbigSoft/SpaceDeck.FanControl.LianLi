@@ -13,7 +13,8 @@ namespace FanControl.LianLi.Devices;
 /// counted, for the worker's throughput line (<see cref="TakeDroppedFrames"/>). Offering wakes the cooler's loop
 /// (through the action the plugin gives it), so a frame does not wait for the next one-second tick.
 /// The Lighting build hands the screen ring's newest look over the same way, from the OpenRGB server,
-/// and keeps the last one offered for a rebuilt or reconnected cooler to show again.
+/// and keeps the last one offered for a rebuilt or reconnected cooler to show again, or hands the ring
+/// back to L-Connect's look, which the worker then replays as it does after a reconnect.
 /// Safe from any thread; it outlives the controller objects, which the plugin builds again on every
 /// refresh and reconnect, so it is kept per cooler for the life of the process.
 /// </summary>
@@ -35,6 +36,8 @@ internal sealed class CoolerHandoff {
 #if ENABLE_LIGHTING
     private Galahad2RingLook? _look;      // waiting to be sent
     private Galahad2RingLook? _lastLook;  // the newest offered or restored, sent or not
+    private bool _handedBack;             // handed back to L-Connect since the last look offered
+    private bool _handBackWaiting;        // a hand-back the worker has not replayed yet
 #endif
 
     /// <summary>A slot timed by <paramref name="clock"/>.</summary>
@@ -125,6 +128,8 @@ internal sealed class CoolerHandoff {
         lock (_gate) {
             _look = look;
             _lastLook = look;
+            _handedBack = false;
+            _handBackWaiting = false;
             wake = _wake;
         }
 
@@ -133,7 +138,8 @@ internal sealed class CoolerHandoff {
 
     /// <summary>
     /// Keep <paramref name="look"/> (a saved one) as the last look, unless one was offered already this
-    /// process, which is newer; nothing is sent until <see cref="OfferLastLook"/>.
+    /// process, which is newer, or the ring was handed back to L-Connect since, which is too; nothing is
+    /// sent until <see cref="OfferLastLook"/>.
     /// </summary>
     public void RestoreLook(Galahad2RingLook look) {
         if (look is null) {
@@ -141,7 +147,36 @@ internal sealed class CoolerHandoff {
         }
 
         lock (_gate) {
-            _lastLook ??= look;
+            if (!_handedBack) {
+                _lastLook ??= look;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Hand the ring back to L-Connect's look: forget the last look and any still waiting, so neither
+    /// this cooler nor a rebuilt one shows OpenRGB's again until a new one is offered, and have the
+    /// worker replay L-Connect's (<see cref="TakeHandBack"/>).
+    /// </summary>
+    public void HandBackToLConnect() {
+        Action? wake;
+        lock (_gate) {
+            _look = null;
+            _lastLook = null;
+            _handedBack = true;
+            _handBackWaiting = true;
+            wake = _wake;
+        }
+
+        wake?.Invoke();
+    }
+
+    /// <summary>Whether the ring was handed back to L-Connect since the last call: true once per hand-back.</summary>
+    public bool TakeHandBack() {
+        lock (_gate) {
+            bool waiting = _handBackWaiting;
+            _handBackWaiting = false;
+            return waiting;
         }
     }
 
