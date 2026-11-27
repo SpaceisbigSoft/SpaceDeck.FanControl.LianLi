@@ -1046,5 +1046,32 @@ public class Galahad2ControllerTests {
         Assert.Equal(2, RingWrites(transport).Count);
         Assert.Single(logger.Messages, m => m == "G0: the screen ring's looks are sent again");
     }
+
+    // The L-Connect mode in OpenRGB: the look waiting is forgotten, and the replay the Lighting build
+    // registered (which shows L-Connect's look once the handoff holds none) is owed, and run by the
+    // next tick's replay step, once per hand-back.
+    [Fact]
+    public void ARingHandedBackToLConnect_IsReplayedByTheNextTick_OncePerHandBack() {
+        var (controller, transport, _, handoff, logger) = NewScreen();
+        int replays = 0;
+        controller.ReplayOnReconnect(() => {
+            replays++;
+            return true;
+        });
+        controller.ApplyPending();
+        handoff.OfferLook(Effect(1));
+        handoff.HandBackToLConnect();
+
+        controller.ApplyPending();
+        Assert.Equal(0, replays);
+        Assert.Empty(RingWrites(transport));
+        Assert.Single(logger.Messages, m => m == "G0: the screen ring is handed back to L-Connect's look");
+
+        controller.ApplyPending();
+        Assert.Equal(1, replays);
+
+        controller.ApplyPending();
+        Assert.Equal(1, replays);
+    }
 #endif
 }

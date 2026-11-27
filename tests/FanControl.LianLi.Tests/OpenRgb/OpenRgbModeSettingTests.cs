@@ -49,6 +49,15 @@ public class OpenRgbModeSettingTests {
     }
 
     [Fact]
+    public void TheLConnectSetting_PutsNoLookOnTheRing() {
+        OpenRgbModeSetting lConnect = OpenRgbModeSetting.DefaultFor(Mode("L-Connect"));
+
+        Assert.Equal((0, 0, 0), (lConnect.Speed, lConnect.Brightness, lConnect.Direction));
+        Assert.Empty(lConnect.Colors);
+        Assert.Throws<InvalidOperationException>(() => lConnect.Look(Leds));
+    }
+
+    [Fact]
     public void From_IsTheSettingOfTheModeThatShowsALook() {
         OpenRgbModeSetting breathing = OpenRgbModeSetting.From(
             new Galahad2RingLook(Galahad2RingMode.Breathing, 1, 3, Galahad2RingLook.CounterClockwise, new[] { Red }));

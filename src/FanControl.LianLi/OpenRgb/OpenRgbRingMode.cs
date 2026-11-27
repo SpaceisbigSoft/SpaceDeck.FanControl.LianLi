@@ -10,7 +10,9 @@ namespace FanControl.LianLi.OpenRgb;
 /// each has: a speed and a brightness on the cooler's 0 to 4 scale, a direction round the ring (OpenRGB's
 /// left and right), and the colours it takes - one per LED for Direct, up to four of its own for the
 /// coloured effects, none for the rainbows. Every mode can be saved (OpenRGB's "Save to device"), which
-/// keeps the look for the plugin to show again at the next start.
+/// keeps the look for the plugin to show again at the next start. The last, <see cref="LConnectName"/>,
+/// puts no look of its own on the ring: picking it hands the ring back to the look L-Connect saved, and
+/// saving it forgets the look saved through OpenRGB.
 /// </summary>
 internal sealed class OpenRgbRingMode {
     /// <summary>MODE_FLAG_HAS_SPEED.</summary>
@@ -46,6 +48,9 @@ internal sealed class OpenRgbRingMode {
     /// <summary>MODE_DIRECTION_RIGHT: clockwise round the ring.</summary>
     public const int Right = 1;
 
+    /// <summary>The name of the mode that hands the ring back to L-Connect's look.</summary>
+    public const string LConnectName = "L-Connect";
+
     private const long EffectFlags = HasSpeedFlag | HasBrightnessFlag | ManualSaveFlag;
     private const int EffectColors = Galahad2RingLook.MaximumEffectColors;
 
@@ -59,9 +64,12 @@ internal sealed class OpenRgbRingMode {
         new OpenRgbRingMode("Rainbow Morph", 2, Galahad2RingMode.RainbowMorph, EffectFlags, 0, 0, NoColors),
         new OpenRgbRingMode("Runway", 5, Galahad2RingMode.Runway, EffectFlags | HasDirectionFlag | ModeSpecificColorFlag, 1, EffectColors, ModeSpecificColors),
         new OpenRgbRingMode("Meteor", 6, Galahad2RingMode.Meteor, EffectFlags | HasDirectionFlag | ModeSpecificColorFlag, 1, EffectColors, ModeSpecificColors),
+
+        // Last, so every other mode keeps the index a client already knows it by.
+        new OpenRgbRingMode(LConnectName, 0, null, ManualSaveFlag, 0, 0, NoColors),
     };
 
-    private OpenRgbRingMode(string name, int value, Galahad2RingMode ringMode, long flags, int colorsMinimum, int colorsMaximum, long colorMode) {
+    private OpenRgbRingMode(string name, int value, Galahad2RingMode? ringMode, long flags, int colorsMinimum, int colorsMaximum, long colorMode) {
         Name = name;
         Value = value;
         RingMode = ringMode;
@@ -74,11 +82,14 @@ internal sealed class OpenRgbRingMode {
     /// <summary>The mode's name, which identifies it in an update from a client.</summary>
     public string Name { get; }
 
-    /// <summary>The mode's value field: the cooler's mode byte, 0 for Direct and Off.</summary>
+    /// <summary>The mode's value field: the cooler's mode byte, 0 for Direct, Off and L-Connect.</summary>
     public int Value { get; }
 
-    /// <summary>What the ring shows in this mode.</summary>
-    public Galahad2RingMode RingMode { get; }
+    /// <summary>What the ring shows in this mode; null for L-Connect, which shows whatever L-Connect saved.</summary>
+    public Galahad2RingMode? RingMode { get; }
+
+    /// <summary>Whether picking the mode hands the ring back to L-Connect's look.</summary>
+    public bool HandsBackToLConnect => RingMode is null;
 
     /// <summary>The MODE_FLAG bits.</summary>
     public long Flags { get; }
@@ -107,7 +118,7 @@ internal sealed class OpenRgbRingMode {
     /// <summary>The top of the brightness scale: 4, or 0 for a mode without one.</summary>
     public int BrightnessMaximum => HasBrightness ? Galahad2RingLook.MaximumLevel : 0;
 
-    /// <summary>The index of the mode that shows <paramref name="ringMode"/>.</summary>
+    /// <summary>The index of the mode that shows <paramref name="ringMode"/> (never L-Connect's).</summary>
     public static int IndexOf(Galahad2RingMode ringMode) {
         for (int i = 0; i < All.Count; i++) {
             if (All[i].RingMode == ringMode) {

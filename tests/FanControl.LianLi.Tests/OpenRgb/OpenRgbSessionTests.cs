@@ -122,6 +122,31 @@ public sealed class OpenRgbSessionTests : IDisposable {
     }
 
     [Fact]
+    public void TheLConnectMode_HandsTheRingBack_AndSavingItForgetsTheSavedLook() {
+        _session.Handle(0, 40, U32(6));
+        var runway = new OpenRgbModeSetting(OpenRgbRingMode.All[6], 4, 2, OpenRgbRingMode.Left, new[] { Red });
+        _session.Handle(0, 1102, OpenRgbCommandDecoderTests.ModePayload(6, runway, 6));
+        _session.Handle(1, 1102, OpenRgbCommandDecoderTests.ModePayload(6, runway, 6));
+        OpenRgbModeSetting lConnect = OpenRgbModeSetting.DefaultFor(OpenRgbRingMode.All[8]);
+
+        Assert.Empty(_session.Handle(0, 1101, OpenRgbCommandDecoderTests.ModePayload(8, lConnect, 6)));
+        Assert.Null(_first.PeekLook());
+        Assert.True(_first.TakeHandBack());
+        Assert.Equal(2, _looks.Load(_log).Count); // an update alone keeps the saved look for the next start
+
+        Assert.Empty(_session.Handle(0, 1102, OpenRgbCommandDecoderTests.ModePayload(8, lConnect, 6)));
+        Assert.Equal(new[] { "LianLi/3" }, _looks.Load(_log).Keys);
+        Assert.Contains(_log.Messages, m => m.StartsWith("OpenRGB: the screen ring's look for LianLi/0 is forgotten", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AZoneMode_IsIgnored_ForTheRingsOneZoneHasNoneOfItsOwn() {
+        Galahad2RingLook? before = _first.PeekLook();
+        Assert.Empty(_session.Handle(0, 1103, new byte[] { 1, 2, 3 }));
+        Assert.Same(before, _first.PeekLook());
+    }
+
+    [Fact]
     public void AnUnknownPacket_IsIgnored()
         => Assert.Empty(_session.Handle(7, 9999, new byte[] { 1, 2, 3 }));
 
@@ -133,6 +158,7 @@ public sealed class OpenRgbSessionTests : IDisposable {
     [InlineData(1100L)]
     [InlineData(1101L)]
     [InlineData(1102L)]
+    [InlineData(1103L)]
     public void APacketForAControllerTheServerDoesNotHave_IsAFormatFault(long packetId)
         => Assert.Equal(
             "a controller the server does not have",

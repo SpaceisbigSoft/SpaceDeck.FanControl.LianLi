@@ -150,6 +150,12 @@ LEDs. The port is 6743, not OpenRGB's own 6742, so OpenRGB's own SDK server can 
   brightness are 0 to 4, the cooler's own scale; Static, Breathing, Runway and Meteor take 1 to 4 colours of their
   own; Rainbow, Runway and Meteor go left (counter-clockwise) or right (clockwise). Every 0x83 is sent with the scope
   byte at outer (1): on the Vision only outer or all light the ring, and inner, which L-Connect writes, shows nothing.
+- **Back to L-Connect's look.** The last mode, `L-Connect`, puts no look of its own on the ring: picking it hands the
+  ring back to the look L-Connect saved for it. The plugin forgets the OpenRGB look, and the cooler's worker replays
+  L-Connect's lighting as it does after a reconnect (on its next tick; the log says `G<n>: the screen ring is handed
+  back to L-Connect's look`). "Save to device" on it also removes the cooler's entry from `openrgb-looks.json`, so
+  L-Connect's look stays after FanControl restarts; without saving, a restart shows the saved OpenRGB look again. When
+  L-Connect saved no ring look for the cooler (or one that follows a live sensor), the ring keeps what it shows.
 - **How a command reaches the ring.** Nothing a client sends is written to the cooler as it is: a command only
   changes the server's view of the ring, which hands the resulting look to the cooler's own worker thread through the
   same slot as the screen frames (`CoolerHandoff`, newest wins), and the worker builds the packets itself
@@ -165,7 +171,8 @@ LEDs. The port is 6743, not OpenRGB's own 6742, so OpenRGB's own SDK server can 
   describes the controller in the layout of the agreed version (checked field by field against lian-li-linux's
   server). It answers REQUEST_CONTROLLER_COUNT, REQUEST_CONTROLLER_DATA (in the version the request asks for),
   REQUEST_PROTOCOL_VERSION, SET_CLIENT_NAME and the profile and plugin list requests (empty), and acts on
-  UPDATELEDS, UPDATEZONELEDS, UPDATESINGLELED, SETCUSTOMMODE, UPDATEMODE and SAVEMODE; any other packet is
+  UPDATELEDS, UPDATEZONELEDS, UPDATESINGLELED, SETCUSTOMMODE, UPDATEMODE and SAVEMODE. UPDATEZONEMODE (version 6) is
+  taken and ignored once its controller is checked: the ring's one zone has no modes of its own. Any other packet is
   ignored, as OpenRGB's own server ignores one. The controller list is fixed for the life of a server: the plugin
   starts one per plugin object (Load) and stops it at Close, so a FanControl refresh disconnects the clients and
   OpenRGB reconnects to the new one by itself; DEVICE_LIST_UPDATED therefore never falls due.

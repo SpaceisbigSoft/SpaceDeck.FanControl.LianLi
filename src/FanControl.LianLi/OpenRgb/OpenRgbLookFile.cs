@@ -75,20 +75,31 @@ internal sealed class OpenRgbLookFile {
             var looks = new SortedDictionary<string, Galahad2RingLook>(Read(log).ToDictionary(e => e.Key, e => e.Value), StringComparer.Ordinal) {
                 [id] = look,
             };
-            string temporary = _path + ".tmp";
-            try {
-                Directory.CreateDirectory(_directory);
-                File.WriteAllText(temporary, Format(looks), new UTF8Encoding(false));
-                if (File.Exists(_path)) {
-                    File.Replace(temporary, _path, null);
-                } else {
-                    File.Move(temporary, _path);
-                }
+            Write(looks, log, "the screen ring's " + look.Mode + " look for " + id + " is saved in ", "the screen ring's look for " + id + " could not be saved to ");
+        }
+    }
 
-                log.Write("OpenRGB: the screen ring's " + look.Mode + " look for " + id + " is saved in " + _path);
-            } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
-                log.Write("OpenRGB: the screen ring's look for " + id + " could not be saved to " + _path + ": " + ex.Message);
+    /// <summary>
+    /// Forget cooler <paramref name="id"/>'s look, keeping the others, so L-Connect's is replayed for it
+    /// at the next start; nothing is written when none is saved for it, and a failure is logged.
+    /// </summary>
+    public void Remove(string id, ILog log) {
+        if (id is null) {
+            throw new ArgumentNullException(nameof(id));
+        }
+
+        if (log is null) {
+            throw new ArgumentNullException(nameof(log));
+        }
+
+        lock (_gate) {
+            var looks = new SortedDictionary<string, Galahad2RingLook>(Read(log).ToDictionary(e => e.Key, e => e.Value), StringComparer.Ordinal);
+            if (!looks.Remove(id)) {
+                log.Write("OpenRGB: no screen ring look was saved for " + id + "; L-Connect's look is replayed at the next start");
+                return;
             }
+
+            Write(looks, log, "the screen ring's look for " + id + " is forgotten, so L-Connect's is replayed at the next start: ", "the screen ring's look for " + id + " could not be forgotten in ");
         }
     }
 
@@ -145,6 +156,24 @@ internal sealed class OpenRgbLookFile {
         }
 
         return looks;
+    }
+
+    // Caller holds _gate. The whole file to a temporary one, then swapped in; each message ends with the path.
+    private void Write(SortedDictionary<string, Galahad2RingLook> looks, ILog log, string written, string failed) {
+        string temporary = _path + ".tmp";
+        try {
+            Directory.CreateDirectory(_directory);
+            File.WriteAllText(temporary, Format(looks), new UTF8Encoding(false));
+            if (File.Exists(_path)) {
+                File.Replace(temporary, _path, null);
+            } else {
+                File.Move(temporary, _path);
+            }
+
+            log.Write("OpenRGB: " + written + _path);
+        } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) {
+            log.Write("OpenRGB: " + failed + _path + ": " + ex.Message);
+        }
     }
 
     // Caller holds _gate.

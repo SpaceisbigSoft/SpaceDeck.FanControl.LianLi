@@ -21,8 +21,8 @@ public class OpenRgbRingTests {
         var ring = new OpenRgbRing("LianLi/0", _handoff);
 
         Assert.Equal("LianLi/0", ring.Id);
-        Assert.Equal(Galahad2RingMode.Direct, ring.Look.Mode);
-        Assert.All(ring.Look.Colors, c => Assert.Equal(White, c));
+        Assert.Equal(Galahad2RingMode.Direct, ring.Look!.Mode);
+        Assert.All(ring.Look!.Colors, c => Assert.Equal(White, c));
         Assert.Null(_handoff.PeekLook());
     }
 
@@ -32,7 +32,7 @@ public class OpenRgbRingTests {
 
         var ring = new OpenRgbRing("LianLi/0", _handoff);
 
-        Galahad2RingLook look = ring.Look;
+        Galahad2RingLook look = ring.Look!;
         Assert.Equal(Galahad2RingMode.Runway, look.Mode);
         Assert.Equal((1, 2, 1), (look.Speed, look.Brightness, look.Direction));
         Assert.Equal(new[] { Red }, look.Colors);
@@ -47,7 +47,7 @@ public class OpenRgbRingTests {
 
         var ring = new OpenRgbRing("LianLi/0", _handoff);
 
-        Assert.Equal(leds, ring.Look.Colors);
+        Assert.Equal(leds, ring.Look!.Colors);
     }
 
     [Fact]
@@ -59,7 +59,27 @@ public class OpenRgbRingTests {
         Galahad2RingLook shown = _handoff.PeekLook()!;
         Assert.Equal(Galahad2RingMode.Static, shown.Mode);
         Assert.Equal(3, shown.Brightness);
-        Assert.Equal(Galahad2RingMode.Static, ring.Look.Mode);
+        Assert.Equal(Galahad2RingMode.Static, ring.Look!.Mode);
+    }
+
+    [Fact]
+    public void TheLConnectMode_HandsTheRingBack_AndShowsNoLookOfItsOwn() {
+        var ring = new OpenRgbRing("LianLi/0", _handoff);
+        ring.SetMode(2, new OpenRgbModeSetting(OpenRgbRingMode.All[2], 0, 3, 0, new[] { Red }));
+
+        ring.SetMode(8, OpenRgbModeSetting.DefaultFor(OpenRgbRingMode.All[8]));
+
+        Assert.Null(ring.Look);
+        Assert.Null(_handoff.PeekLook());
+        Assert.Null(_handoff.LastLook);
+        Assert.True(_handoff.TakeHandBack());
+        byte[] description = ring.Describe("v", 6);
+        Assert.Equal(description.Length, BitConverter.ToInt32(description, 0));
+
+        ring.SetLeds(Enumerable.Repeat(Red, 12).ToArray());
+        Assert.Null(_handoff.PeekLook()); // not Direct, so the LEDs are only kept
+        ring.SetCustomMode();
+        Assert.Equal(Galahad2RingMode.Direct, _handoff.PeekLook()!.Mode);
     }
 
     [Fact]
@@ -91,7 +111,7 @@ public class OpenRgbRingTests {
         Assert.Throws<ArgumentNullException>(() => new OpenRgbRing(null!, _handoff));
         Assert.Throws<ArgumentNullException>(() => new OpenRgbRing("LianLi/0", null!));
         Assert.Throws<ArgumentOutOfRangeException>(() => ring.SetMode(-1, setting));
-        Assert.Throws<ArgumentOutOfRangeException>(() => ring.SetMode(8, setting));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ring.SetMode(9, setting));
         Assert.Throws<ArgumentNullException>(() => ring.SetMode(2, null!));
         Assert.Throws<ArgumentException>(() => ring.SetMode(3, setting));
         Assert.Throws<ArgumentNullException>(() => ring.SetLeds(null!));

@@ -9,11 +9,11 @@ namespace FanControl.LianLi.Tests.OpenRgb;
 
 public class OpenRgbRingModeTests {
     [Fact]
-    public void TheModes_AreDirectOffAndTheCoolersEffects_InOrder() {
+    public void TheModes_AreDirectOffTheCoolersEffectsAndLConnect_InOrder() {
         Assert.Equal(
-            new[] { "Direct", "Off", "Static", "Breathing", "Rainbow", "Rainbow Morph", "Runway", "Meteor" },
+            new[] { "Direct", "Off", "Static", "Breathing", "Rainbow", "Rainbow Morph", "Runway", "Meteor", "L-Connect" },
             OpenRgbRingMode.All.Select(m => m.Name));
-        Assert.Equal(new[] { 0, 0, 3, 4, 1, 2, 5, 6 }, OpenRgbRingMode.All.Select(m => m.Value));
+        Assert.Equal(new[] { 0, 0, 3, 4, 1, 2, 5, 6, 0 }, OpenRgbRingMode.All.Select(m => m.Value));
         Assert.All(OpenRgbRingMode.All, m => Assert.NotEqual(0, m.Flags & OpenRgbRingMode.ManualSaveFlag));
     }
 
@@ -43,12 +43,21 @@ public class OpenRgbRingModeTests {
         Assert.Equal(OpenRgbRingMode.NoColors, rainbow.ColorMode);
         Assert.Equal(0x113, rainbow.Flags);
         Assert.Equal(0x150, OpenRgbRingMode.All[2].Flags); // Static: brightness, its own colours, no speed
+
+        OpenRgbRingMode lConnect = OpenRgbRingMode.All[8];
+        Assert.Equal(OpenRgbRingMode.LConnectName, lConnect.Name);
+        Assert.Null(lConnect.RingMode);
+        Assert.True(lConnect.HandsBackToLConnect);
+        Assert.Equal(OpenRgbRingMode.ManualSaveFlag, lConnect.Flags);
+        Assert.Equal((0, 0), (lConnect.ColorsMinimum, lConnect.ColorsMaximum));
+        Assert.Equal(OpenRgbRingMode.NoColors, lConnect.ColorMode);
+        Assert.All(OpenRgbRingMode.All.Take(8), m => Assert.False(m.HandsBackToLConnect));
     }
 
     [Fact]
     public void IndexOf_FindsTheModeOfEachLook() {
-        for (int i = 0; i < OpenRgbRingMode.All.Count; i++) {
-            Assert.Equal(i, OpenRgbRingMode.IndexOf(OpenRgbRingMode.All[i].RingMode));
+        for (int i = 0; i < OpenRgbRingMode.All.Count - 1; i++) {
+            Assert.Equal(i, OpenRgbRingMode.IndexOf(OpenRgbRingMode.All[i].RingMode.Value));
         }
 
         Assert.Throws<ArgumentOutOfRangeException>(() => OpenRgbRingMode.IndexOf((Galahad2RingMode)99));

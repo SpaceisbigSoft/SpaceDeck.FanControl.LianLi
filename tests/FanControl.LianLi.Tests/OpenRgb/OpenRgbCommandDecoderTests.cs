@@ -101,7 +101,7 @@ public class OpenRgbCommandDecoderTests {
 
     [Fact]
     public void UpdateMode_ThatTheRingCannotTake_IsAFormatFault() {
-        Assert.Equal("a mode the ring does not have", Fault(() => OpenRgbCommandDecoder.Mode(RawMode(8, "Direct", 0, 0, 0, 1, Array.Empty<RgbColor>()), 5, out _)));
+        Assert.Equal("a mode the ring does not have", Fault(() => OpenRgbCommandDecoder.Mode(RawMode(9, "Direct", 0, 0, 0, 1, Array.Empty<RgbColor>()), 5, out _)));
         Assert.Equal("a mode whose name is not its index's", Fault(() => OpenRgbCommandDecoder.Mode(RawMode(2, "Direct", 0, 0, 0, 2, new[] { Red }), 5, out _)));
         Assert.Equal("a mode with colours other than its own", Fault(() => OpenRgbCommandDecoder.Mode(RawMode(2, "Static", 0, 0, 0, 1, new[] { Red }), 5, out _)));
         Assert.Equal("a mode with more or fewer colours than it takes", Fault(() => OpenRgbCommandDecoder.Mode(RawMode(2, "Static", 0, 0, 0, 2, Array.Empty<RgbColor>()), 5, out _)));

@@ -99,19 +99,21 @@ internal sealed class OpenRgbModeSetting {
 
     /// <summary>
     /// The look this setting puts on the ring; a direct one takes <paramref name="leds"/>, one colour
-    /// per LED. A mode without a brightness shows at full brightness.
+    /// per LED. A mode without a brightness shows at full brightness. L-Connect's mode has no look of
+    /// its own and throws <see cref="InvalidOperationException"/>.
     /// </summary>
     public Galahad2RingLook Look(IReadOnlyList<RgbColor> leds) {
         if (leds is null) {
             throw new ArgumentNullException(nameof(leds));
         }
 
+        Galahad2RingMode ringMode = Mode.RingMode ?? throw new InvalidOperationException("The L-Connect mode puts no look of its own on the ring.");
         return new Galahad2RingLook(
-            Mode.RingMode,
+            ringMode,
             Speed,
             Mode.HasBrightness ? Brightness : Galahad2RingLook.MaximumLevel,
             Direction == OpenRgbRingMode.Left && Mode.HasDirection ? Galahad2RingLook.CounterClockwise : Galahad2RingLook.Clockwise,
-            Mode.RingMode == Galahad2RingMode.Direct ? leds : Colors);
+            ringMode == Galahad2RingMode.Direct ? leds : Colors);
     }
 }
 #endif

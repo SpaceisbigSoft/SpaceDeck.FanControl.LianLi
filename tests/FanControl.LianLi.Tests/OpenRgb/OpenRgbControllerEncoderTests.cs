@@ -89,10 +89,10 @@ public class OpenRgbControllerEncoderTests {
         Assert.Equal("2.0.9", wire.Text());
         Assert.Equal("LianLi/0", wire.Text());
         Assert.Equal("FanControl Lian Li plugin: LianLi/0", wire.Text());
-        Assert.Equal(8, wire.U16());
+        Assert.Equal(9, wire.U16());
         Assert.Equal(6, wire.I32());
         OpenRgbModeSetting[] settings = Settings();
-        for (int m = 0; m < 8; m++) {
+        for (int m = 0; m < 9; m++) {
             OpenRgbRingMode mode = OpenRgbRingMode.All[m];
             Assert.Equal(mode.Name, wire.Text());
             if (version < 6) {
