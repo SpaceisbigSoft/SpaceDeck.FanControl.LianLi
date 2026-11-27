@@ -65,18 +65,6 @@ jobs:
             - name: Test Lighting
               run: dotnet test -c Release -p:EnableLighting=true -p:CollectCoverage=true
 
-            - name: Uncovered lines
-              if: failure()
-              shell: python
-              run: |
-                  import xml.etree.ElementTree as ET
-                  root = ET.parse("coverage/coverage.cobertura.xml").getroot()
-                  for c in root.iter("class"):
-                      for line in c.iter("line"):
-                          partial = line.get("branch") == "True" and not line.get("condition-coverage", "").startswith("100%")
-                          if line.get("hits") == "0" or partial:
-                              print("::error file=%s,line=%s::uncovered %s" % (c.get("filename"), line.get("number"), line.get("condition-coverage", "")))
-
             - name: Build SpaceDeck
               # The Lighting variant under SpaceDeck's file name. The plugin's Name (and so every
               # FanControl binding, '<Name>/<sensor id>') is the Lighting build's own, so curves bound
