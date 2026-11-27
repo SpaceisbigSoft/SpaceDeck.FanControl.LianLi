@@ -292,7 +292,7 @@ public class SpaceDeckScreenClientTests {
         var client = NewClient();
 
         client.Start();
-        Assert.True(offered.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(SpinWait.SpinUntil(() => offered.IsSet, TimeSpan.FromSeconds(10)));
         client.Dispose();
 
         Assert.True(client.HasStopped);
@@ -320,7 +320,7 @@ public class SpaceDeckScreenClientTests {
         };
         var client = NewClient();
         client.Start();
-        Assert.True(reading.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(SpinWait.SpinUntil(() => reading.IsSet, TimeSpan.FromSeconds(10)));
 
         client.Dispose();
 
