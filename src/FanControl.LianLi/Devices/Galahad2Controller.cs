@@ -22,7 +22,7 @@ namespace FanControl.LianLi.Devices;
 /// reported through <see cref="IFanSpeedSource"/>, under the channels' RPM identities, so the pump's
 /// stays when its control does not. A Vision LCD is also given a <see cref="CoolerHandoff"/>, through
 /// which SpaceDeck's screen frames reach it: the worker sends the newest waiting frame after the
-/// duties and before the status poll, at most thirty a second, and since a frame wakes the loop, a
+/// duties and before the status poll, at most thirty a second on average, and since a frame wakes the loop, a
 /// cooler with a handoff polls its status at most every half second however often it is woken. Once
 /// a minute while frames go out it logs what they cost (<see cref="ScreenFrameTally"/>).
 /// </summary>
@@ -54,13 +54,23 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     private static readonly TimeSpan HandshakeTimeLimit = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// The most frames a second sent to one screen: enough for smooth motion, and what SpaceDeck's
-    /// screen pipe promises at most; a frame due sooner waits, replaced by any newer one.
+    /// The most frames a second sent to one screen on average: enough for smooth motion, and what
+    /// SpaceDeck's screen pipe promises at most; a frame without a token waits, replaced by any newer one.
     /// </summary>
     public const int MostFramesPerSecond = 30;
 
-    // The frames' gap in ticks, so a thirtieth of a second is not rounded to whole milliseconds.
-    private static readonly TimeSpan MinimumFrameGap = TimeSpan.FromTicks(TimeSpan.TicksPerSecond / MostFramesPerSecond);
+    /// <summary>
+    /// The frames sent one after another after a quiet spell: the size of the screen's token bucket,
+    /// refilled at <see cref="MostFramesPerSecond"/>. A tenth of a second of the refill, so a frame that
+    /// comes a timer tick late and the next on time are both sent, where a strict thirtieth-of-a-second
+    /// gap held the second back until a newer one replaced it.
+    /// </summary>
+    public const int FrameBurst = 3;
+
+    // The bucket counts in ticks' worth of refill: a frame costs a second's ticks and every tick of the
+    // clock adds MostFramesPerSecond, so a thirtieth of a second is not rounded to whole ticks.
+    private const long FrameCost = TimeSpan.TicksPerSecond;
+    private const long FrameCreditLimit = FrameBurst * FrameCost;
 
     // A cooler woken for each frame still polls its status no more than twice a second: L-Connect
     // asks once a second, and nothing shows that a cooler wants to be asked more often.
@@ -110,10 +120,11 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     private bool _handshakeMissing;
     private bool _handshakeAnswered;
 
-    // When the last handshake and the last screen frame went out, and whether the last frame failed
-    // and any has been shown, so the log says each once. Worker only.
+    // When the last handshake went out; the screen's token bucket and when it was last refilled; and
+    // whether the last frame failed and any has been shown, so the log says each once. Worker only.
     private DateTime? _lastHandshakeUtc;
-    private DateTime? _lastFrameUtc;
+    private long _frameCredit = FrameCreditLimit;
+    private DateTime? _frameCreditUtc;
     private bool _framesFailing;
     private bool _framesShown;
     private readonly ScreenFrameTally _frameTally = new ScreenFrameTally();
@@ -386,9 +397,10 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
             && ClockSpan.Since(_clock.UtcNow, last) < MinimumHandshakeGap;
 
     // Send the newest frame waiting for the screen, between two status polls, as 0x0E SendJpeg in
-    // B packets, and never again: the handoff gives a frame out once. A frame that arrives within
-    // a thirtieth of a second of the last stays waiting for the next tick (and is dropped if it waits five
-    // seconds); one that arrives while the cooler is off the bus waits the same way, so a frame is
+    // B packets, and never again: the handoff gives a frame out once, and a tick sends at most one. A
+    // frame that arrives while the screen's token bucket is empty stays waiting for a later tick - the
+    // next frame's wake, or the one-second tick - replaced by any newer one (and is dropped if it waits
+    // five seconds); one that arrives while the cooler is off the bus waits the same way, so a frame is
     // never the write that reopens the cooler. Nothing reads the cooler's one B-packet echo: every
     // transport write starts by discarding the input queued for its handle (IDeviceTransport.Write),
     // so the next packet's write or the next handshake's drops an echo that has already arrived, and
@@ -402,7 +414,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
         }
 
         DateTime now = _clock.UtcNow;
-        if (_lastFrameUtc is DateTime last && ClockSpan.Since(now, last) < MinimumFrameGap) {
+        if (!HasFrameToken(now)) {
             return;
         }
 
@@ -410,7 +422,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
             return;
         }
 
-        _lastFrameUtc = now;
+        _frameCredit -= FrameCost;
         IReadOnlyList<byte[]> packets = Galahad2ScreenEncoder.EncodeJpeg(jpeg);
         try {
             foreach (byte[] packet in packets) {
@@ -444,6 +456,20 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
             _framesFailing = false;
             _framesShown = true;
         }
+    }
+
+    // Refill the screen's token bucket for the time since it was last refilled, and whether it holds a
+    // frame's worth. A second refills more than the whole bucket, so the time is counted up to a second,
+    // and a clock that stepped back counts as long ago (ClockSpan.Since), which fills it: a frame is
+    // never held back by a clock correction.
+    private bool HasFrameToken(DateTime now) {
+        if (_frameCreditUtc is DateTime then) {
+            long elapsed = Math.Min(ClockSpan.Since(now, then).Ticks, TimeSpan.TicksPerSecond);
+            _frameCredit = Math.Min(FrameCreditLimit, _frameCredit + (elapsed * MostFramesPerSecond));
+        }
+
+        _frameCreditUtc = now;
+        return _frameCredit >= FrameCost;
     }
 
     // Once a minute while frames go out, one line of what they cost, with the frames the handoff

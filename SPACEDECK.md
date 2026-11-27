@@ -110,7 +110,11 @@ are a JPEG's.
   for the life of the process): a newer frame replaces the one waiting, nothing queues, and one that has waited five
   seconds is dropped. Handing it over wakes that cooler's loop alone, which sends it after the duties and before the
   status poll, as 0x0E SendJpeg in 1024-byte B packets of 1013 payload bytes each (`Galahad2ScreenEncoder`), at most
-  thirty frames a second, and never twice. A frame is sent between two ticks' duties, so it delays a fan or pump
+  one a tick and never twice. The frames a cooler is sent are rationed by a token bucket of 3, refilled at thirty a
+  second (on the injected clock; a clock that steps back fills it): a frame with a token goes out at once, so frames
+  at up to thirty a second that come a timer tick early or late are all sent, and one without a token waits for a
+  later tick, replaced by any newer one. A strict thirtieth of a second between frames held back each frame that came
+  a little early until the next replaced it. A frame is sent between two ticks' duties, so it delays a fan or pump
   write by at most one frame's transfer. Since a frame wakes the loop, the cooler's status is asked for at most every
   half second however often it is woken. The cooler answers the last packet with an echo, which nothing reads: every
   write the transport makes first discards the input queued for the handle, so the next write drops an echo that has

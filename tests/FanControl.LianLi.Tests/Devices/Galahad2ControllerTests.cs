@@ -700,30 +700,41 @@ public class Galahad2ControllerTests {
     }
 
     [Fact]
-    public void AFrameWithinAThirtiethOfASecondOfTheLast_WaitsForALaterTick() {
+    public void ThreeFramesGoOutOneAfterAnother_OnePerTick_AndAFourthWaitsForTheBucketToRefill() {
         Assert.Equal(30, Galahad2Controller.MostFramesPerSecond);
+        Assert.Equal(3, Galahad2Controller.FrameBurst);
         var (controller, transport, clock, handoff, logger) = NewScreen();
-        handoff.OfferFrame(Jpeg(10));
-        controller.ApplyPending();
-        transport.Clear();
+        for (int i = 1; i <= 3; i++) {
+            handoff.OfferFrame(Jpeg(10 * i));
+            controller.ApplyPending();
+            Assert.Equal(10 * i, Assert.Single(BPackets(transport))[10]);
+            transport.Clear();
+        }
 
-        // A thirtieth of a second is 33.3 ms: 33 ms is too soon, 34 ms is not.
-        handoff.OfferFrame(Jpeg(20));
+        // The bucket is empty, and refills a frame each thirtieth of a second, 33.3 ms: 33 ms is too
+        // soon, 34 ms is not.
+        handoff.OfferFrame(Jpeg(40));
+        controller.ApplyPending();
+        Assert.Empty(BPackets(transport));
         clock.Advance(TimeSpan.FromMilliseconds(33));
         controller.ApplyPending();
         Assert.Empty(BPackets(transport));
 
         clock.Advance(TimeSpan.FromMilliseconds(1));
         controller.ApplyPending();
-        Assert.Equal(20, Assert.Single(BPackets(transport))[10]);
+        Assert.Equal(40, Assert.Single(BPackets(transport))[10]);
         Assert.Single(logger.Messages, m => m.Contains("screen frames"));
     }
 
     [Fact]
     public void AFrame_AfterTheClockSteppedBack_IsNotHeldBack() {
         var (controller, transport, clock, handoff, _) = NewScreen();
-        handoff.OfferFrame(Jpeg(10));
-        controller.ApplyPending();
+        for (int i = 0; i < Galahad2Controller.FrameBurst; i++) {
+            handoff.OfferFrame(Jpeg(10));
+            controller.ApplyPending();
+        }
+
+        Assert.Equal(3, BPackets(transport).Count);
         transport.Clear();
 
         clock.Advance(TimeSpan.FromSeconds(-1));
@@ -844,6 +855,69 @@ public class Galahad2ControllerTests {
         // the fifteen-second keepalive, on the first tick past it.
         Assert.Equal(new[] { 0, 300 }, fanWrites);
         Assert.Equal(new[] { 0, 451 }, pumpWrites);
+    }
+
+    // Frame times from one second on at framesPerSecond, each early or late by up to 16 ms - a
+    // Windows timer tick and more, as the collector's writes reach the plugin: alternately 16 ms early
+    // and late, or spread over -16..+16 ms; never before the frame ahead of it.
+    private static List<TimeSpan> JitteredFrames(int framesPerSecond, bool alternating) {
+        var times = new List<TimeSpan>();
+        for (int i = 0; i < 600; i++) {
+            int jitterMs = alternating ? (i % 2 == 0 ? -16 : 16) : ((i * 13) % 33) - 16;
+            var at = TimeSpan.FromTicks(TimeSpan.TicksPerSecond + (i * TimeSpan.TicksPerSecond / framesPerSecond) + (jitterMs * TimeSpan.TicksPerMillisecond));
+            times.Add(times.Count == 0 || at > times[^1] ? at : times[^1]);
+        }
+
+        return times;
+    }
+
+    // Each frame offered at its time and its woken tick run as the worker runs it: the frames sent,
+    // the ticks the status was asked for on, and the frames dropped unsent.
+    private static (int Sent, List<TimeSpan> Handshakes, int Dropped) RunFrames(List<TimeSpan> times) {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        transport.ReplyFor = _ => VisionHandshakeReply(1200, 2700, 1, 31, 5);
+        byte[] handshake = Galahad2Protocol.EncodeHandshakeRequest();
+        DateTime start = clock.UtcNow;
+        TimeSpan now = TimeSpan.Zero;
+        int sent = 0;
+        var handshakes = new List<TimeSpan>();
+        foreach (TimeSpan at in times) {
+            clock.Advance(at - now);
+            now = at;
+            handoff.OfferFrame(Jpeg(10));
+            controller.ApplyPending();
+            controller.PollRpm();
+            sent += BPackets(transport).Count;
+            handshakes.AddRange(transport.Writes.Where(w => w.SequenceEqual(handshake)).Select(_ => clock.UtcNow - start));
+            transport.Clear();
+        }
+
+        return (sent, handshakes, handoff.TakeDroppedFrames());
+    }
+
+    [Theory]
+    [InlineData(24, false)]
+    [InlineData(30, false)]
+    [InlineData(24, true)]
+    [InlineData(30, true)]
+    public void AJitteredStreamOfUpToThirtyFramesASecond_IsSentWhole_WhileTheStatusIsPolledAtMostEveryHalfSecond(int framesPerSecond, bool alternating) {
+        var (sent, handshakes, dropped) = RunFrames(JitteredFrames(framesPerSecond, alternating));
+
+        Assert.Equal(600, sent);
+        Assert.Equal(0, dropped);
+        Assert.All(handshakes.Zip(handshakes.Skip(1), (earlier, later) => later - earlier), gap => Assert.True(gap >= TimeSpan.FromMilliseconds(500)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SixtyFramesASecond_AreHeldToThirty_TheNewestWaiting(bool alternating) {
+        var (sent, _, dropped) = RunFrames(JitteredFrames(60, alternating));
+
+        // Ten seconds at thirty a second, and the bucket's three at the start; every other frame was
+        // replaced by a newer one before a token came.
+        Assert.InRange(sent, 300, 303);
+        Assert.InRange(sent + dropped, 599, 600);
     }
 
     [Fact]
