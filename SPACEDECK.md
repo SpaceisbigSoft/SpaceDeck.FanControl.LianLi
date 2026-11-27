@@ -104,18 +104,22 @@ are a JPEG's.
   and it has the publisher's off switch: no `SpaceDeckCollector` service, one log line, nothing more.
 - **What is checked.** Every message (`SpaceDeckScreenDecoder`): the `SDSF` magic, version 1, kind 1, an id of 1 to
   128 characters by the catalog's id rule, a payload of 1 byte to 256 KiB that starts `FF D8` and ends `FF D9`, and no
-  more than 4 messages a second on average (a burst of 8). A message that breaks a rule drops the connection; a frame
+  more than 30 messages a second on average (a burst of 60). A message that breaks a rule drops the connection; a frame
   for a device without a screen is ignored. Each kind of failure is logged once per plugin object.
 - **How a frame reaches the screen.** The client puts the frame in the cooler's slot (`CoolerHandoff`, one per cooler
   for the life of the process): a newer frame replaces the one waiting, nothing queues, and one that has waited five
   seconds is dropped. Handing it over wakes that cooler's loop alone, which sends it after the duties and before the
   status poll, as 0x0E SendJpeg in 1024-byte B packets of 1013 payload bytes each (`Galahad2ScreenEncoder`), at most
-  two frames a second, and never twice. Since a frame wakes the loop, the cooler's status is asked for at most every
+  thirty frames a second, and never twice. A frame is sent between two ticks' duties, so it delays a fan or pump
+  write by at most one frame's transfer. Since a frame wakes the loop, the cooler's status is asked for at most every
   half second however often it is woken. The cooler answers the last packet with an echo, which nothing reads: every
   write the transport makes first discards the input queued for the handle, so the next write drops an echo that has
   arrived, and the status poll reads past one that arrives later (it takes only a reply that echoes 0x81). Reading the
   echo would cost the loop a read timeout whenever the cooler sends none. A frame is never the write that reopens a
   cooler that is off the bus: it waits (and expires) instead.
+- **What it costs.** Once a minute while frames are sent, `plugin.log` has one line per cooler (`ScreenFrameTally`):
+  `G0: screen frames in the last minute: 1740 sent, 12 dropped before sending (replaced by a newer one or expired),
+  21.4 ms average and 48.0 ms longest to write one, 38211 bytes average`. A screen nobody draws on logs nothing.
 - **Failsafe.** The cooler shows its own screen again about 20 seconds after the last frame, so when SpaceDeck stops
   drawing - or FanControl, the plugin or the collector stops - the screen goes back by itself; nothing is undone. A
   frame write that fails costs only that frame (the next complete one puts the screen right) and is logged once until

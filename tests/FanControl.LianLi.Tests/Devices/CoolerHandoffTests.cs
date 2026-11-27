@@ -8,7 +8,7 @@ using Xunit;
 
 namespace FanControl.LianLi.Tests.Devices;
 
-/// <summary>The screen frame slot: replaced not queued, taken once, dropped after five seconds unsent, and the wake.</summary>
+/// <summary>The screen frame slot: replaced not queued, taken once, dropped after five seconds unsent, the drops counted, and the wake.</summary>
 public class CoolerHandoffTests {
     private readonly FakeClock _clock = new FakeClock();
 
@@ -50,6 +50,25 @@ public class CoolerHandoffTests {
         handoff.OfferFrame(new byte[] { 3 });
         _clock.Advance(TimeSpan.FromSeconds(-10));
         Assert.NotNull(handoff.TakeFrame());
+    }
+
+    [Fact]
+    public void EveryFrameDroppedUnsent_IsCounted_ReplacedOrExpired_AndTheCountStartsAgainOnceTaken() {
+        var handoff = new CoolerHandoff(_clock);
+        Assert.Equal(0, handoff.TakeDroppedFrames());
+
+        handoff.OfferFrame(new byte[] { 1 });
+        handoff.OfferFrame(new byte[] { 2 });
+        handoff.OfferFrame(new byte[] { 3 });
+        Assert.NotNull(handoff.TakeFrame());
+        Assert.Null(handoff.TakeFrame());
+
+        handoff.OfferFrame(new byte[] { 4 });
+        _clock.Advance(CoolerHandoff.FrameLifetime + TimeSpan.FromMilliseconds(1));
+        Assert.Null(handoff.TakeFrame());
+
+        Assert.Equal(3, handoff.TakeDroppedFrames());
+        Assert.Equal(0, handoff.TakeDroppedFrames());
     }
 
     [Fact]

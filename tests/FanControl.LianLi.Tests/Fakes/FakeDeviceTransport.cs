@@ -70,6 +70,9 @@ internal sealed class FakeDeviceTransport : IDeviceTransport {
     /// <summary>When set, <see cref="Write"/> throws for each report it returns true for.</summary>
     public Func<byte[], bool>? FailWrite { get; set; }
 
+    /// <summary>When set, <see cref="Write"/> calls this with each report it has recorded: a test that times a write moves its clock here.</summary>
+    public Action<byte[]>? OnWrite { get; set; }
+
     /// <summary>When set, <see cref="SetFeature"/> throws - the feature-report path (fan control and lighting effects).</summary>
     public bool FailFeatures { get; set; }
 
@@ -100,6 +103,8 @@ internal sealed class FakeDeviceTransport : IDeviceTransport {
             Transfers.Add(new KeyValuePair<bool, byte[]>(false, copy));
             _lastWrite = copy;
         }
+
+        OnWrite?.Invoke(report);
     }
 
     public void SetFeature(byte[] report) {

@@ -17,8 +17,8 @@ namespace FanControl.LianLi.SpaceDeck;
 /// <c>SpaceDeckCollector</c> service's own process, as <see cref="SpaceDeckPublisher"/> does for the
 /// readings; while the collector is absent it tries again after a gap that doubles from one second to
 /// thirty, and when it is not installed it logs one line and stops. Nothing is ever written to the
-/// pipe. Every message is checked (<see cref="SpaceDeckScreenDecoder"/>) and rationed - a burst of 8,
-/// then 4 a second on average - and one that breaks a rule drops the connection; one for a device
+/// pipe. Every message is checked (<see cref="SpaceDeckScreenDecoder"/>) and rationed - a burst of 60,
+/// then 30 a second on average - and one that breaks a rule drops the connection; one for a device
 /// without a screen is ignored. Each kind of failure is logged once for the life of the client, so a
 /// collector that keeps misbehaving costs a line, not one per try. The only bytes from the pipe that
 /// reach a cooler are a JPEG's, which the plugin wraps in packets of its own. <see cref="Step"/> does
@@ -29,11 +29,17 @@ internal sealed class SpaceDeckScreenClient : IDisposable {
     /// <summary>The collector's screen pipe, <c>\\.\pipe\SpaceDeck.Screen</c>.</summary>
     public const string PipeName = "SpaceDeck.Screen";
 
-    /// <summary>The most messages taken at once after a quiet spell: the token bucket's size.</summary>
-    public const int BurstMessages = 8;
+    /// <summary>
+    /// The most messages taken at once after a quiet spell: the token bucket's size, two seconds of
+    /// the refill, so a collector that catches up after a stall is not taken for a flood.
+    /// </summary>
+    public const int BurstMessages = 60;
 
-    /// <summary>The messages a second the bucket refills at: the collector forwards at most 2 a second per screen.</summary>
-    public const int MessagesPerSecond = 4;
+    /// <summary>
+    /// The messages a second the bucket refills at: the collector forwards at most 30 a second in
+    /// all, the most a screen takes (<see cref="Galahad2Controller"/> sends at most 30 frames a second).
+    /// </summary>
+    public const int MessagesPerSecond = 30;
 
     /// <summary>What <see cref="Step"/> returns once the client has nothing more to do.</summary>
     public const int Stopped = -1;
@@ -247,7 +253,7 @@ internal sealed class SpaceDeckScreenClient : IDisposable {
         _tokens = Math.Min(BurstMessages * TokenScale, _tokens + (elapsed * MessagesPerSecond));
         _tokensAt = now;
         if (_tokens < TokenScale) {
-            throw new FormatException("more than 4 messages a second");
+            throw new FormatException(string.Format(CultureInfo.InvariantCulture, "more than {0} messages a second", MessagesPerSecond));
         }
 
         _tokens -= TokenScale;

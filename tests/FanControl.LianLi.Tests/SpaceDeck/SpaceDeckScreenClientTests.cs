@@ -135,32 +135,34 @@ public class SpaceDeckScreenClientTests {
     }
 
     [Fact]
-    public void AStreamOfMessages_IsRationedToABurstOfEight_ThenFourASecond() {
+    public void AStreamOfMessages_IsRationedToABurstOfSixty_ThenThirtyASecond() {
+        Assert.Equal(60, SpaceDeckScreenClient.BurstMessages);
+        Assert.Equal(30, SpaceDeckScreenClient.MessagesPerSecond);
         byte[] message = ScreenMessage.Build("LianLi/0", ScreenMessage.Jpeg(10));
-        Script(Enumerable.Repeat(message, 11).ToArray());
+        Script(Enumerable.Repeat(message, 63).ToArray());
         using SpaceDeckScreenClient client = NewClient();
 
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 60; i++) {
             Assert.Equal(0, client.Step());
         }
 
-        // A quarter of a second refills one message, and no more.
-        _clock.NowMilliseconds = 250;
+        // 34 ms refills one message (a thirtieth of a second is 33.3 ms), and no more.
+        _clock.NowMilliseconds = 34;
         Assert.Equal(0, client.Step());
         Assert.Equal(1000, client.Step());
 
-        Assert.Contains(NotReading("the collector sent more than 4 messages a second, so the connection was dropped"), _log.Messages);
+        Assert.Contains(NotReading("the collector sent more than 30 messages a second, so the connection was dropped"), _log.Messages);
     }
 
     [Fact]
     public void TheBucket_RefillsNoFurtherThanItsBurst() {
         byte[] message = ScreenMessage.Build("LianLi/0", ScreenMessage.Jpeg(10));
-        Script(Enumerable.Repeat(message, 10).ToArray());
+        Script(Enumerable.Repeat(message, 62).ToArray());
         using SpaceDeckScreenClient client = NewClient();
         client.Step();
 
         _clock.NowMilliseconds = 60_000;
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 60; i++) {
             Assert.Equal(0, client.Step());
         }
 

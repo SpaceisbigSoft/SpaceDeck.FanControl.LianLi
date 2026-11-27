@@ -700,14 +700,16 @@ public class Galahad2ControllerTests {
     }
 
     [Fact]
-    public void AFrameWithinHalfASecondOfTheLast_WaitsForALaterTick() {
+    public void AFrameWithinAThirtiethOfASecondOfTheLast_WaitsForALaterTick() {
+        Assert.Equal(30, Galahad2Controller.MostFramesPerSecond);
         var (controller, transport, clock, handoff, logger) = NewScreen();
         handoff.OfferFrame(Jpeg(10));
         controller.ApplyPending();
         transport.Clear();
 
+        // A thirtieth of a second is 33.3 ms: 33 ms is too soon, 34 ms is not.
         handoff.OfferFrame(Jpeg(20));
-        clock.Advance(TimeSpan.FromMilliseconds(499));
+        clock.Advance(TimeSpan.FromMilliseconds(33));
         controller.ApplyPending();
         Assert.Empty(BPackets(transport));
 
@@ -791,6 +793,90 @@ public class Galahad2ControllerTests {
         controller.PollRpm();
         Assert.Equal(3, transport.Writes.Count);
         Assert.Equal(31.5f, controller.GetTemperature(0));
+    }
+
+    [Fact]
+    public void FramesAtThirtyASecond_AreAllSent_WhileTheStatusIsPolledAtMostEveryHalfSecond_AndTheDutiesKeepTheirSchedule() {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        transport.ReplyFor = _ => VisionHandshakeReply(1200, 2700, 1, 31, 5);
+        byte[] handshake = Galahad2Protocol.EncodeHandshakeRequest();
+        byte[] pump = Galahad2Protocol.EncodeFollowMotherboardPump();
+        byte[] fanAt40 = Galahad2Protocol.EncodeSetFan(motherboardSync: false, dutyPercent: 40);
+        byte[] fanAt60 = Galahad2Protocol.EncodeSetFan(motherboardSync: false, dutyPercent: 60);
+        int frames = 0;
+        var handshakes = new List<int>();
+        var fanWrites = new List<int>();
+        var pumpWrites = new List<int>();
+        controller.SetTarget(FanChannel, 40);
+
+        // Twenty seconds of a frame every thirtieth of a second, each woken tick as the worker runs it.
+        for (int i = 0; i < 600; i++) {
+            if (i == 300) {
+                controller.SetTarget(FanChannel, 60);
+            }
+
+            handoff.OfferFrame(Jpeg(10));
+            controller.ApplyPending();
+            controller.PollRpm();
+
+            // A duty due on a tick is that tick's first write: a frame never goes ahead of it.
+            if (i == 300) {
+                Assert.Equal(fanAt60, transport.Writes[0]);
+            } else if (i == 451) {
+                Assert.Equal(pump, transport.Writes[0]);
+            }
+
+            frames += BPackets(transport).Count;
+            handshakes.AddRange(transport.Writes.Where(w => w.SequenceEqual(handshake)).Select(_ => i));
+            fanWrites.AddRange(transport.Writes.Where(w => w.SequenceEqual(fanAt40) || w.SequenceEqual(fanAt60)).Select(_ => i));
+            pumpWrites.AddRange(transport.Writes.Where(w => w.SequenceEqual(pump)).Select(_ => i));
+            transport.Clear();
+            clock.Advance(TimeSpan.FromTicks(TimeSpan.TicksPerSecond / 30));
+        }
+
+        Assert.Equal(600, frames);
+        Assert.Equal(0, handoff.TakeDroppedFrames());
+
+        // Half a second is fifteen thirtieths, and the sixteenth tick is the first past it.
+        Assert.Equal(Enumerable.Range(0, 38).Select(n => n * 16), handshakes);
+
+        // The fan at the start and on the change, at once; the pump's command at the start and on
+        // the fifteen-second keepalive, on the first tick past it.
+        Assert.Equal(new[] { 0, 300 }, fanWrites);
+        Assert.Equal(new[] { 0, 451 }, pumpWrites);
+    }
+
+    [Fact]
+    public void OnceAMinuteWhileFramesAreSent_OneLineSaysWhatTheyCost() {
+        var (controller, transport, clock, handoff, logger) = NewScreen();
+        transport.OnWrite = report => {
+            if (report[0] == 0x02) {
+                clock.Advance(TimeSpan.FromMilliseconds(5));
+            }
+        };
+
+        // A frame of two packets each second, and one replaced before it could be sent.
+        for (int second = 0; second < 60; second++) {
+            handoff.OfferFrame(Jpeg(1500));
+            if (second == 10) {
+                handoff.OfferFrame(Jpeg(1500));
+            }
+
+            controller.ApplyPending();
+            Assert.DoesNotContain(logger.Messages, m => m.Contains("in the last minute"));
+            clock.Advance(TimeSpan.FromSeconds(1) - TimeSpan.FromMilliseconds(10));
+        }
+
+        controller.ApplyPending();
+
+        Assert.Single(
+            logger.Messages,
+            m => m == "G0: screen frames in the last minute: 60 sent, 1 dropped before sending (replaced by a newer one or expired), 10.0 ms average and 10.0 ms longest to write one, 1500 bytes average");
+
+        // Nothing more is sent, so nothing more is logged.
+        clock.Advance(TimeSpan.FromMinutes(5));
+        controller.ApplyPending();
+        Assert.Single(logger.Messages, m => m.Contains("in the last minute"));
     }
 #if ENABLE_LIGHTING
 

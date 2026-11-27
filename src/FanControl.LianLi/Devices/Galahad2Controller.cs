@@ -22,8 +22,9 @@ namespace FanControl.LianLi.Devices;
 /// reported through <see cref="IFanSpeedSource"/>, under the channels' RPM identities, so the pump's
 /// stays when its control does not. A Vision LCD is also given a <see cref="CoolerHandoff"/>, through
 /// which SpaceDeck's screen frames reach it: the worker sends the newest waiting frame after the
-/// duties and before the status poll, at most two a second, and since a frame wakes the loop, a
-/// cooler with a handoff polls its status at most every half second however often it is woken.
+/// duties and before the status poll, at most thirty a second, and since a frame wakes the loop, a
+/// cooler with a handoff polls its status at most every half second however often it is woken. Once
+/// a minute while frames go out it logs what they cost (<see cref="ScreenFrameTally"/>).
 /// </summary>
 internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanSpeedSource {
     private const int FanChannel = 0;
@@ -52,10 +53,17 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     // again each second, so an answer later than a second is overtaken by the next ask there too.
     private static readonly TimeSpan HandshakeTimeLimit = TimeSpan.FromSeconds(1);
 
-    // The screen takes at most two frames a second (SpaceDeck's screen pipe promises no more), and a
-    // cooler woken for each frame still polls its status no more than twice a second: L-Connect asks
-    // once a second, and nothing shows that a cooler wants to be asked more often.
-    private static readonly TimeSpan MinimumFrameGap = TimeSpan.FromMilliseconds(500);
+    /// <summary>
+    /// The most frames a second sent to one screen: enough for smooth motion, and what SpaceDeck's
+    /// screen pipe promises at most; a frame due sooner waits, replaced by any newer one.
+    /// </summary>
+    public const int MostFramesPerSecond = 30;
+
+    // The frames' gap in ticks, so a thirtieth of a second is not rounded to whole milliseconds.
+    private static readonly TimeSpan MinimumFrameGap = TimeSpan.FromTicks(TimeSpan.TicksPerSecond / MostFramesPerSecond);
+
+    // A cooler woken for each frame still polls its status no more than twice a second: L-Connect
+    // asks once a second, and nothing shows that a cooler wants to be asked more often.
     private static readonly TimeSpan MinimumHandshakeGap = TimeSpan.FromMilliseconds(500);
 #if ENABLE_LIGHTING
 
@@ -108,6 +116,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     private DateTime? _lastFrameUtc;
     private bool _framesFailing;
     private bool _framesShown;
+    private readonly ScreenFrameTally _frameTally = new ScreenFrameTally();
 #if ENABLE_LIGHTING
     private DateTime? _lastEffectUtc;
     private DateTime? _lastDirectUtc;
@@ -291,6 +300,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
         }
 
         SendScreenFrame();
+        LogScreenFrameTally();
 #if ENABLE_LIGHTING
         SendRingLook();
 #endif
@@ -377,7 +387,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
 
     // Send the newest frame waiting for the screen, between two status polls, as 0x0E SendJpeg in
     // B packets, and never again: the handoff gives a frame out once. A frame that arrives within
-    // half a second of the last stays waiting for the next tick (and is dropped if it waits five
+    // a thirtieth of a second of the last stays waiting for the next tick (and is dropped if it waits five
     // seconds); one that arrives while the cooler is off the bus waits the same way, so a frame is
     // never the write that reopens the cooler. Nothing reads the cooler's one B-packet echo: every
     // transport write starts by discarding the input queued for its handle (IDeviceTransport.Write),
@@ -406,6 +416,8 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
             foreach (byte[] packet in packets) {
                 _transport.Write(packet);
             }
+
+            _frameTally.Sent(jpeg.Length, now, _clock.UtcNow);
         }
 #pragma warning disable CA1031 // opt-in feature: a screen frame that cannot be written costs only that frame, never the duties or the status poll
         catch (Exception ex) {
@@ -432,6 +444,16 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
             _framesFailing = false;
             _framesShown = true;
         }
+    }
+
+    // Once a minute while frames go out, one line of what they cost, with the frames the handoff
+    // dropped meanwhile; a screen nobody draws on logs nothing.
+    private void LogScreenFrameTally() {
+        if (_handoff is null || !_frameTally.IsDue(_clock.UtcNow)) {
+            return;
+        }
+
+        _log.Write(_frameTally.Close(_index, _handoff.TakeDroppedFrames()));
     }
 
 #if ENABLE_LIGHTING

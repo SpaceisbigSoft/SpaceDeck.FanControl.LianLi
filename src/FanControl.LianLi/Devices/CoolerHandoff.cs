@@ -9,7 +9,8 @@ namespace FanControl.LianLi.Devices;
 /// What other threads hand one Galahad II Vision LCD's worker: the newest frame for its screen. It is
 /// a slot, not a queue: a newer frame replaces the one waiting, so the worker only ever sends the
 /// newest, and a frame that has waited longer than <see cref="FrameLifetime"/> is dropped unsent,
-/// since a picture shown late is worse than the cooler's own screen. Offering wakes the cooler's loop
+/// since a picture shown late is worse than the cooler's own screen; each frame dropped either way is
+/// counted, for the worker's throughput line (<see cref="TakeDroppedFrames"/>). Offering wakes the cooler's loop
 /// (through the action the plugin gives it), so a frame does not wait for the next one-second tick.
 /// The Lighting build hands the screen ring's newest look over the same way, from the OpenRGB server,
 /// and keeps the last one offered for a rebuilt or reconnected cooler to show again.
@@ -29,6 +30,7 @@ internal sealed class CoolerHandoff {
     // Under _gate.
     private byte[]? _frame;
     private DateTime _frameOfferedUtc;
+    private int _droppedFrames;
     private Action? _wake;
 #if ENABLE_LIGHTING
     private Galahad2RingLook? _look;      // waiting to be sent
@@ -58,6 +60,10 @@ internal sealed class CoolerHandoff {
 
         Action? wake;
         lock (_gate) {
+            if (_frame != null) {
+                _droppedFrames++;
+            }
+
             _frame = jpeg;
             _frameOfferedUtc = _clock.UtcNow;
             wake = _wake;
@@ -74,7 +80,28 @@ internal sealed class CoolerHandoff {
         lock (_gate) {
             byte[]? frame = _frame;
             _frame = null;
-            return frame is null || ClockSpan.IsOlderThan(_clock.UtcNow, _frameOfferedUtc, FrameLifetime) ? null : frame;
+            if (frame is null) {
+                return null;
+            }
+
+            if (ClockSpan.IsOlderThan(_clock.UtcNow, _frameOfferedUtc, FrameLifetime)) {
+                _droppedFrames++;
+                return null;
+            }
+
+            return frame;
+        }
+    }
+
+    /// <summary>
+    /// The frames dropped unsent since the last call - replaced by a newer one while waiting, or
+    /// expired - and a count from zero again.
+    /// </summary>
+    public int TakeDroppedFrames() {
+        lock (_gate) {
+            int dropped = _droppedFrames;
+            _droppedFrames = 0;
+            return dropped;
         }
     }
 #if ENABLE_LIGHTING
