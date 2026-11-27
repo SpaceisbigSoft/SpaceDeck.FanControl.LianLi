@@ -83,6 +83,9 @@ internal sealed class ControllerLoop : IDisposable {
         }
     }
 
+    /// <summary>Whether this loop drives <paramref name="controller"/>, the very object it was given.</summary>
+    public bool Drives(IFanDevice controller) => ReferenceEquals(_controller, controller);
+
     /// <summary>Apply pending targets, then poll RPM, isolating a fault in either and logging it.</summary>
     public void Tick() {
         lock (_tickGate) {

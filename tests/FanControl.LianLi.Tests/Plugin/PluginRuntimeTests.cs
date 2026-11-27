@@ -404,6 +404,36 @@ public sealed class PluginRuntimeTests {
     }
 
     [Fact]
+    public void WakeAController_WithNothingRunning_IsANoOp() {
+        var runtime = new PluginRuntime(new FakeClock(), new FakeRememberedControllerStore());
+
+        runtime.Wake(new FakeFanDevice("c0"));
+
+        Assert.False(runtime.IsOwnedBy(new object()));
+    }
+
+    [Fact]
+    public void WakeAController_TicksItsLoop() {
+        var runtime = new PluginRuntime(new FakeClock(), new FakeRememberedControllerStore()) { WorkerTickIntervalMilliseconds = 600_000 };
+        var device = new FakeFanDevice("c0");
+        object owner = new object();
+        runtime.Start(owner, new IFanDevice[] { device }, new FakeLogger());
+        Assert.True(SpinWait.SpinUntil(() => device.PollCount >= 1, TimeSpan.FromSeconds(5)), "the worker never ran its first tick");
+
+        runtime.Wake(device);
+
+        Assert.True(SpinWait.SpinUntil(() => device.PollCount >= 2, TimeSpan.FromSeconds(5)), "the wake did not bring the next tick forward");
+        runtime.StopIfOwnedBy(owner);
+    }
+
+    [Fact]
+    public void Coolers_AreKeptForTheLifeOfTheRuntime() {
+        var runtime = new PluginRuntime(new FakeClock(), new FakeRememberedControllerStore());
+
+        Assert.Same(runtime.Coolers.For(0), runtime.Coolers.For(0));
+    }
+
+    [Fact]
     public void Wake_WithNothingRunning_IsANoOp() {
         var runtime = new PluginRuntime(new FakeClock(), new FakeRememberedControllerStore());
 

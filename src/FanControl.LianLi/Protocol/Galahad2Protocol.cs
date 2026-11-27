@@ -51,6 +51,12 @@ internal static class Galahad2Protocol {
     public static bool ReportsCoolant(int productId)
         => productId == VisionProductId || productId == VisionAlternateProductId;
 
+    /// <summary>
+    /// Whether a Galahad II product id has the 480x480 screen the plugin can send frames to: the
+    /// Vision LCD's two ids, the same coolers that report the coolant.
+    /// </summary>
+    public static bool HasScreen(int productId) => ReportsCoolant(productId);
+
     /// <summary>Encode a fan-duty command. <paramref name="dutyPercent"/> is clamped to 0-100, 1:1.</summary>
     public static byte[] EncodeSetFan(bool motherboardSync, int dutyPercent) {
         byte duty = (byte)Clamp(dutyPercent, 0, DutyMax);

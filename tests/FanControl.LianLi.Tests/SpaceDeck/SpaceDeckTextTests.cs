@@ -88,5 +88,21 @@ public class SpaceDeckTextTests {
         Assert.Throws<ArgumentNullException>(() => SpaceDeckText.Id(null!));
         Assert.Throws<ArgumentNullException>(() => SpaceDeckText.Name(null!, "x"));
         Assert.Throws<ArgumentNullException>(() => SpaceDeckText.Name("x", null!));
+        Assert.Throws<ArgumentNullException>(() => SpaceDeckText.IsValidId(null!));
+    }
+
+    [Theory]
+    [InlineData("LianLi/0", true)]
+    [InlineData("A-Z_a.z:0/9", true)]
+    [InlineData("", false)]
+    [InlineData("LianLi 0", false)]
+    [InlineData("LianLi/\u00e9", false)]
+    public void IsValidId_TakesOnlyTheIdSet(string id, bool expected)
+        => Assert.Equal(expected, SpaceDeckText.IsValidId(id));
+
+    [Fact]
+    public void IsValidId_TakesAtMost128Characters() {
+        Assert.True(SpaceDeckText.IsValidId(new string('a', 128)));
+        Assert.False(SpaceDeckText.IsValidId(new string('a', 129)));
     }
 }

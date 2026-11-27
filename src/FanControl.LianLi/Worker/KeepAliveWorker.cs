@@ -75,6 +75,19 @@ internal sealed class KeepAliveWorker : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Tick only the loop that drives <paramref name="controller"/> now: something was handed to that
+    /// controller alone (a cooler's screen frame), and the others have nothing to do. Safe from any
+    /// thread until <see cref="Dispose"/> is called; a controller this worker does not drive wakes nothing.
+    /// </summary>
+    public void Wake(IFanDevice controller) {
+        foreach (ControllerLoop loop in _loops) {
+            if (loop.Drives(controller)) {
+                loop.Wake();
+            }
+        }
+    }
+
     public void Dispose() {
         if (Interlocked.Exchange(ref _disposed, 1) == 1) {
             return;

@@ -167,5 +167,21 @@ public class SpaceDeckReadingsTests {
     public void NullArguments_AreRejected() {
         Assert.Throws<ArgumentNullException>(() => SpaceDeckReadings.From(null!, _log));
         Assert.Throws<ArgumentNullException>(() => SpaceDeckReadings.From(new FakeSensorsContainer(), null!));
+        Assert.Throws<ArgumentNullException>(() => SpaceDeckReadings.From(new FakeSensorsContainer(), null!, _log));
+        Assert.Throws<ArgumentNullException>(() => SpaceDeckReadings.From(null!, Array.Empty<string>(), _log));
+        Assert.Throws<ArgumentNullException>(() => SpaceDeckReadings.From(new FakeSensorsContainer(), Array.Empty<string>(), null!));
+    }
+
+    [Fact]
+    public void ADeviceNamedAsAScreen_IsListedWithTheGalahad2LcdScreen_AndOnlyThatOne() {
+        var container = new FakeSensorsContainer();
+        container.TempSensors.Add(new FakePluginSensor("LianLi/1/coolant/temp", "Lian Li GA II LCD Coolant", 31.5f));
+        container.FanSensors.Add(new FakePluginSensor("LianLi/0/ch0/fan", "Lian Li Uni #1 Ch 1 RPM", 900f));
+
+        SpaceDeckCatalog catalog = SpaceDeckReadings.From(container, new[] { "LianLi/1", "LianLi/7" }, _log).Catalog;
+
+        Assert.Same(SpaceDeckScreen.Galahad2Lcd, catalog.Hardware[0].Screen);
+        Assert.Null(catalog.Hardware[1].Screen);
+        Assert.Contains("\"kind\":\"cooler\",\"screen\":{\"width\":480,\"height\":480,\"format\":\"jpeg\"}}", catalog.Line, StringComparison.Ordinal);
     }
 }

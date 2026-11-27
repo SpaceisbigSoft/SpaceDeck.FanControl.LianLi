@@ -659,4 +659,137 @@ public class Galahad2ControllerTests {
         controller.ApplyPending();
         Assert.Empty(transport.Writes);
     }
+
+    // ---------- screen frames ----------
+
+    private static (Galahad2Controller controller, FakeDeviceTransport transport, FakeClock clock, CoolerHandoff handoff, FakeLogger logger) NewScreen() {
+        var transport = new FakeDeviceTransport();
+        var clock = new FakeClock();
+        var handoff = new CoolerHandoff(clock);
+        var logger = new FakeLogger();
+        var controller = new Galahad2Controller(0, transport, 0x7395, clock, logger, handoff);
+        return (controller, transport, clock, handoff, logger);
+    }
+
+    private static byte[] Jpeg(int length) {
+        var jpeg = new byte[length];
+        jpeg[0] = 0xFF;
+        jpeg[1] = 0xD8;
+        jpeg[length - 2] = 0xFF;
+        jpeg[length - 1] = 0xD9;
+        return jpeg;
+    }
+
+    private static List<byte[]> BPackets(FakeDeviceTransport transport) => transport.Writes.Where(w => w[0] == 0x02).ToList();
+
+    [Fact]
+    public void ApplyPending_SendsTheWaitingFrame_AfterTheDuties_AsSendJpegPackets_AndNeverAgain() {
+        var (controller, transport, _, handoff, logger) = NewScreen();
+        byte[] jpeg = Jpeg(2100);
+        handoff.OfferFrame(jpeg);
+
+        controller.ApplyPending();
+
+        Assert.Equal(Galahad2Protocol.EncodeFollowMotherboardPump(), transport.Writes[0]);
+        Assert.Equal(Galahad2ScreenEncoder.EncodeJpeg(jpeg), transport.Writes.Skip(1).ToList());
+        Assert.Single(logger.Messages, m => m == "G0: showing SpaceDeck's screen frames (2100 bytes in 3 packets)");
+
+        transport.Clear();
+        controller.ApplyPending();
+        Assert.Empty(transport.Writes);
+    }
+
+    [Fact]
+    public void AFrameWithinHalfASecondOfTheLast_WaitsForALaterTick() {
+        var (controller, transport, clock, handoff, logger) = NewScreen();
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+        transport.Clear();
+
+        handoff.OfferFrame(Jpeg(20));
+        clock.Advance(TimeSpan.FromMilliseconds(499));
+        controller.ApplyPending();
+        Assert.Empty(BPackets(transport));
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        controller.ApplyPending();
+        Assert.Equal(20, Assert.Single(BPackets(transport))[10]);
+        Assert.Single(logger.Messages, m => m.Contains("screen frames"));
+    }
+
+    [Fact]
+    public void AFrame_AfterTheClockSteppedBack_IsNotHeldBack() {
+        var (controller, transport, clock, handoff, _) = NewScreen();
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+        transport.Clear();
+
+        clock.Advance(TimeSpan.FromSeconds(-1));
+        handoff.OfferFrame(Jpeg(20));
+        controller.ApplyPending();
+
+        Assert.Single(BPackets(transport));
+    }
+
+    [Fact]
+    public void AFrame_WaitsWhileTheCoolerIsOffTheBus() {
+        var (controller, transport, _, handoff, _) = NewScreen();
+        transport.IsFaulted = true;
+        handoff.OfferFrame(Jpeg(10));
+
+        controller.ApplyPending();
+        Assert.Empty(BPackets(transport));
+
+        transport.IsFaulted = false;
+        controller.ApplyPending();
+        Assert.Single(BPackets(transport));
+    }
+
+    [Fact]
+    public void AFrameThatCannotBeWritten_CostsOnlyThatFrame_AndIsLoggedOnceUntilOneIsSent() {
+        var (controller, transport, clock, handoff, logger) = NewScreen();
+        transport.FailWrite = report => report[0] == 0x02;
+        controller.SetTarget(FanChannel, 40);
+
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+
+        Assert.Equal(2, transport.Writes.Count); // the fan and the pump, nothing of either frame
+        Assert.Single(logger.Messages, m => m == "G0: a screen frame could not be sent, so it was dropped (logged once until one is sent): simulated device write failure");
+        Assert.Null(handoff.TakeFrame());
+
+        transport.FailWrite = null;
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+        clock.Advance(TimeSpan.FromSeconds(1));
+        handoff.OfferFrame(Jpeg(10));
+        controller.ApplyPending();
+
+        Assert.Equal(2, BPackets(transport).Count);
+        Assert.Single(logger.Messages, m => m == "G0: screen frames are sent again (10 bytes in 1 packets)");
+        Assert.DoesNotContain(logger.Messages, m => m.StartsWith("G0: showing", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ACoolerWithAHandoff_PollsItsStatusAtMostEveryHalfSecond() {
+        var (controller, transport, clock, _, _) = NewScreen();
+        transport.ReplyFor = _ => VisionHandshakeReply(1200, 2700, 1, 31, 5);
+
+        controller.PollRpm();
+        controller.PollRpm();
+        Assert.Single(transport.Writes);
+
+        clock.Advance(TimeSpan.FromMilliseconds(500));
+        controller.PollRpm();
+        Assert.Equal(2, transport.Writes.Count);
+
+        clock.Advance(TimeSpan.FromSeconds(-5));
+        controller.PollRpm();
+        Assert.Equal(3, transport.Writes.Count);
+        Assert.Equal(31.5f, controller.GetTemperature(0));
+    }
 }

@@ -41,6 +41,21 @@ public class SpaceDeckPipeEncoderTests {
     }
 
     [Fact]
+    public void Catalog_GivesADeviceWithAScreenItsScreenField() {
+        var hardware = new[] {
+            new SpaceDeckHardware("LianLi/0", "Lian Li GA II LCD", SpaceDeckHardware.CoolerKind, SpaceDeckScreen.Galahad2Lcd),
+            new SpaceDeckHardware("LianLi/1", "Odd", SpaceDeckHardware.FansKind, new SpaceDeckScreen(1, 1024, "j\"g")),
+        };
+
+        Assert.Equal(
+            "{\"t\":\"catalog\",\"hardware\":["
+                + "{\"id\":\"LianLi/0\",\"name\":\"Lian Li GA II LCD\",\"kind\":\"cooler\",\"screen\":{\"width\":480,\"height\":480,\"format\":\"jpeg\"}},"
+                + "{\"id\":\"LianLi/1\",\"name\":\"Odd\",\"kind\":\"fans\",\"screen\":{\"width\":1,\"height\":1024,\"format\":\"j\\\"g\"}}"
+                + "],\"sensors\":[]}\n",
+            SpaceDeckPipeEncoder.Catalog(hardware, Array.Empty<SpaceDeckSensor>()));
+    }
+
+    [Fact]
     public void Catalog_OfNothing_HasEmptyLists()
         => Assert.Equal(
             "{\"t\":\"catalog\",\"hardware\":[],\"sensors\":[]}\n",

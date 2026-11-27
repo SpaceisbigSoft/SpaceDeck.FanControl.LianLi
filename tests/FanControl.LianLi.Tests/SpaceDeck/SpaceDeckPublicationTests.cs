@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Threading;
+using FanControl.LianLi.Devices;
 using FanControl.LianLi.SpaceDeck;
 using FanControl.LianLi.Tests.Fakes;
 using Xunit;
@@ -39,6 +41,34 @@ public class SpaceDeckPublicationTests {
     }
 
     [Fact]
+    public void AScreen_IsInTheCatalogOfThePublisherStarted() {
+        _services.ProcessId = null;
+        var container = new FakeSensorsContainer();
+        container.FanSensors.Add(new FakePluginSensor("LianLi/0/ch1/fan", "Lian Li GA II LCD Pump RPM", 2800f));
+
+        using SpaceDeckPublisher? publisher = NewPublication().Start("Lian Li Uni", Guid.NewGuid(), container, new[] { "LianLi/0" });
+
+        Assert.NotNull(publisher);
+        Assert.True(SpinWait.SpinUntil(() => publisher.HasStopped, TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public void NoScreen_StartsNoScreenClient()
+        => Assert.Null(NewPublication().StartScreens(new Dictionary<string, CoolerHandoff>()));
+
+    [Fact]
+    public void AScreen_StartsAScreenClientOnItsOwnThread() {
+        _services.ProcessId = null;
+        var screens = new Dictionary<string, CoolerHandoff> { ["LianLi/0"] = new CoolerHandoff(new FakeClock()) };
+
+        using SpaceDeckScreenClient? client = NewPublication().StartScreens(screens);
+
+        Assert.NotNull(client);
+        Assert.True(SpinWait.SpinUntil(() => client.HasStopped, TimeSpan.FromSeconds(10)));
+        Assert.Equal(new[] { SpaceDeckPublisher.ServiceName }, _services.Queries);
+    }
+
+    [Fact]
     public void TheVersion_IsTheAssemblysInformationalVersion() {
         Assembly plugin = typeof(SpaceDeckPublication).Assembly;
 
@@ -60,6 +90,7 @@ public class SpaceDeckPublicationTests {
     [Fact]
     public void NullArguments_AreRejected() {
         Assert.Throws<ArgumentNullException>(() => SpaceDeckPublication.VersionOf(null!));
+        Assert.Throws<ArgumentNullException>(() => NewPublication().StartScreens(null!));
         Assert.Throws<ArgumentNullException>(() => new SpaceDeckPublication(null!, _services, _runner, _clock, _log));
         Assert.Throws<ArgumentNullException>(() => new SpaceDeckPublication(_pipe, null!, _runner, _clock, _log));
         Assert.Throws<ArgumentNullException>(() => new SpaceDeckPublication(_pipe, _services, null!, _clock, _log));

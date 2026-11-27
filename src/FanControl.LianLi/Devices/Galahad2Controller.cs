@@ -20,7 +20,10 @@ namespace FanControl.LianLi.Devices;
 /// pump channel is not a control: the plugin keeps re-sending the command that hands the pump to the
 /// header, on the same schedule as a duty, and still reports the pump's RPM. Every speed reading is
 /// reported through <see cref="IFanSpeedSource"/>, under the channels' RPM identities, so the pump's
-/// stays when its control does not.
+/// stays when its control does not. A Vision LCD is also given a <see cref="CoolerHandoff"/>, through
+/// which SpaceDeck's screen frames reach it: the worker sends the newest waiting frame after the
+/// duties and before the status poll, at most two a second, and since a frame wakes the loop, a
+/// cooler with a handoff polls its status at most every half second however often it is woken.
 /// </summary>
 internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanSpeedSource {
     private const int FanChannel = 0;
@@ -49,6 +52,12 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     // again each second, so an answer later than a second is overtaken by the next ask there too.
     private static readonly TimeSpan HandshakeTimeLimit = TimeSpan.FromSeconds(1);
 
+    // The screen takes at most two frames a second (SpaceDeck's screen pipe promises no more), and a
+    // cooler woken for each frame still polls its status no more than twice a second: L-Connect asks
+    // once a second, and nothing shows that a cooler wants to be asked more often.
+    private static readonly TimeSpan MinimumFrameGap = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan MinimumHandshakeGap = TimeSpan.FromMilliseconds(500);
+
     // The name the cooler's sensors and controls start with. A Galahad II Vision LCD is named as Lian
     // Li sells it, "GA II LCD": every variant (280, 360, SL-INF, TL Wireless) reports the same product
     // ids, so the model is as far as the name can go, and it carries no number because the ids, not
@@ -62,6 +71,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     private readonly bool _pumpFollowsMotherboard; // the pump is handed to the motherboard header
     private readonly IClock _clock;
     private readonly ILog _log;
+    private readonly CoolerHandoff? _handoff;      // a Vision LCD's screen frames; null on every other cooler
 
     private readonly object _lock = new object();
     private readonly int[] _target = { -1, -1 };          // commanded duty %, -1 = unassigned
@@ -84,7 +94,22 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     private bool _handshakeMissing;
     private bool _handshakeAnswered;
 
-    public Galahad2Controller(int index, IDeviceTransport transport, int productId, IClock clock, ILog log) {
+    // When the last handshake and the last screen frame went out, and whether the last frame failed
+    // and any has been shown, so the log says each once. Worker only.
+    private DateTime? _lastHandshakeUtc;
+    private DateTime? _lastFrameUtc;
+    private bool _framesFailing;
+    private bool _framesShown;
+
+    public Galahad2Controller(int index, IDeviceTransport transport, int productId, IClock clock, ILog log)
+        : this(index, transport, productId, clock, log, null) {
+    }
+
+    /// <summary>
+    /// A cooler that also takes screen frames from <paramref name="handoff"/>; null for a cooler
+    /// without a screen, or with nothing to show on it.
+    /// </summary>
+    public Galahad2Controller(int index, IDeviceTransport transport, int productId, IClock clock, ILog log, CoolerHandoff? handoff) {
         _index = index;
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _reportsCoolant = Galahad2Protocol.ReportsCoolant(productId);
@@ -99,6 +124,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
 
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _log = log ?? throw new ArgumentNullException(nameof(log));
+        _handoff = handoff;
         _setUpGeneration = _transport.Generation;
         _reconnectReplay = new ReconnectReplay(_clock);
     }
@@ -250,6 +276,8 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
                     target));
             }
         }
+
+        SendScreenFrame();
     }
 
     /// <inheritdoc />
@@ -269,6 +297,10 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     /// leaves the coolant not measured rather than at its last value.
     /// </summary>
     public void PollRpm() {
+        if (HandshakeIsRecent()) {
+            return;
+        }
+
         // Without an answer both readings stay as they were, as L-Connect leaves them.
         if (Handshake() is not byte[] reply) {
             return;
@@ -301,6 +333,7 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
     // reports, so a stream of other reports cannot hold the tick. Null when none answers it.
     private byte[]? Handshake() {
         DateTime started = _clock.UtcNow;
+        _lastHandshakeUtc = started;
         _transport.Write(Galahad2Protocol.EncodeHandshakeRequest());
         int reads = 0;
         byte lastCommand = 0;
@@ -317,6 +350,72 @@ internal sealed class Galahad2Controller : IFanDevice, ITemperatureSource, IFanS
 
         RecordHandshake(answered: false, reads, lastCommand);
         return null;
+    }
+
+    // A cooler with a handoff is woken for every frame it is handed, and the status is not asked for
+    // on each of those ticks. A clock that stepped back counts as long ago, so the poll goes ahead.
+    private bool HandshakeIsRecent()
+        => _handoff != null
+            && _lastHandshakeUtc is DateTime last
+            && ClockSpan.Since(_clock.UtcNow, last) < MinimumHandshakeGap;
+
+    // Send the newest frame waiting for the screen, between two status polls, as 0x0E SendJpeg in
+    // B packets, and never again: the handoff gives a frame out once. A frame that arrives within
+    // half a second of the last stays waiting for the next tick (and is dropped if it waits five
+    // seconds); one that arrives while the cooler is off the bus waits the same way, so a frame is
+    // never the write that reopens the cooler. Nothing reads the cooler's one B-packet echo: every
+    // transport write starts by discarding the input queued for its handle (IDeviceTransport.Write),
+    // so the next packet's write or the next handshake's drops an echo that has already arrived, and
+    // the handshake reads past one that arrives later, since it takes only a reply echoing 0x81.
+    // Reading the echo here instead would cost the worker a read timeout whenever the cooler sent
+    // none. A write that fails costs only this frame - the next complete one puts the screen right -
+    // and is logged once until a frame goes out again; the duties and the poll go on regardless.
+    private void SendScreenFrame() {
+        if (_handoff is null || _transport.IsFaulted) {
+            return;
+        }
+
+        DateTime now = _clock.UtcNow;
+        if (_lastFrameUtc is DateTime last && ClockSpan.Since(now, last) < MinimumFrameGap) {
+            return;
+        }
+
+        if (_handoff.TakeFrame() is not byte[] jpeg) {
+            return;
+        }
+
+        _lastFrameUtc = now;
+        IReadOnlyList<byte[]> packets = Galahad2ScreenEncoder.EncodeJpeg(jpeg);
+        try {
+            foreach (byte[] packet in packets) {
+                _transport.Write(packet);
+            }
+        }
+#pragma warning disable CA1031 // opt-in feature: a screen frame that cannot be written costs only that frame, never the duties or the status poll
+        catch (Exception ex) {
+#pragma warning restore CA1031
+            if (!_framesFailing) {
+                _framesFailing = true;
+                _log.Write(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "G{0}: a screen frame could not be sent, so it was dropped (logged once until one is sent): {1}",
+                    _index,
+                    ex.Message));
+            }
+
+            return;
+        }
+
+        if (_framesFailing || !_framesShown) {
+            _log.Write(string.Format(
+                CultureInfo.InvariantCulture,
+                _framesFailing ? "G{0}: screen frames are sent again ({1} bytes in {2} packets)" : "G{0}: showing SpaceDeck's screen frames ({1} bytes in {2} packets)",
+                _index,
+                jpeg.Length,
+                packets.Count));
+            _framesFailing = false;
+            _framesShown = true;
+        }
     }
 
     // The first read always goes ahead, so a slow write never costs the poll its answer; every later

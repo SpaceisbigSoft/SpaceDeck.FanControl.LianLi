@@ -80,10 +80,14 @@ internal sealed class PluginRuntime {
     public PluginRuntime(IClock clock, IRememberedControllerStore store) {
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _store = store ?? throw new ArgumentNullException(nameof(store));
+        Coolers = new CoolerHandoffs(_clock);
     }
 
     /// <summary>What the wireless controller keeps across the new one each refresh builds: its channel, save schedule and switched screens.</summary>
     public WirelessProcessState WirelessState { get; } = new WirelessProcessState();
+
+    /// <summary>What other threads hand each Galahad II Vision LCD's worker: its screen frames, kept per cooler index.</summary>
+    public CoolerHandoffs Coolers { get; }
 
     /// <summary>
     /// How often the worker's loops tick, when not the worker's own once a second; a test lengthens
@@ -354,6 +358,16 @@ internal sealed class PluginRuntime {
         // this same lock, so the one woken here is never one that is being disposed.
         lock (_sync) {
             _worker?.Wake();
+        }
+    }
+
+    /// <summary>
+    /// Have the worker tick the loop of <paramref name="controller"/> now: something was handed to it
+    /// alone. Nothing when no worker runs, or the one running does not drive it (an earlier run's).
+    /// </summary>
+    public void Wake(IFanDevice controller) {
+        lock (_sync) {
+            _worker?.Wake(controller);
         }
     }
 

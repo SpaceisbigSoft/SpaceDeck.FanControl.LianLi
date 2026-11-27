@@ -81,6 +81,9 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     private readonly Guid _instance = Guid.NewGuid();
     private SpaceDeckPublisher? _publisher;
 
+    // SpaceDeck's build: the client Load started for the coolers' screens, if any; swapped like the publisher.
+    private SpaceDeckScreenClient? _screenClient;
+
 #if ENABLE_LIGHTING
     // L-Connect's saved looks, read at the start of each Initialize and only read after that, by
     // the builds and by any stand-in rebuilding a controller later.
@@ -346,6 +349,28 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
         BuildAll(plans, scanFailed);
         _runtime.Persist(_log);
         _runtime.Start(this, _controllers.Select(controller => controller.Value).ToArray(), _log);
+        WakeCoolersOnHandoff();
+    }
+
+    // SpaceDeck's build: what is handed to a Galahad II Vision LCD (a screen frame) wakes that
+    // cooler's loop alone, so it goes out now rather than at the next tick. The handoff is the
+    // process's, kept per index across refreshes, and woken through the controller registered now.
+    private void WakeCoolersOnHandoff() {
+        foreach (KeyValuePair<int, IFanDevice> cooler in ScreenCoolers()) {
+            IFanDevice controller = cooler.Value;
+            _runtime.Coolers.For(cooler.Key).WakeWith(() => _runtime.Wake(controller));
+        }
+    }
+
+    // Every registered controller that is a Galahad II Vision LCD, by its index: built, or stood in
+    // for. Every registered controller is remembered (BuildAll), so its plan says what it is.
+    private IEnumerable<KeyValuePair<int, IFanDevice>> ScreenCoolers() {
+        foreach (KeyValuePair<string, IFanDevice> entry in _controllers) {
+            RememberedController remembered = _runtime.Recall(entry.Key)!; // registered, so remembered
+            if (remembered.Plan.Kind == DeviceKind.Galahad2 && Galahad2Protocol.HasScreen(remembered.Plan.Devices[0].ProductId)) {
+                yield return new KeyValuePair<int, IFanDevice>(remembered.Index, entry.Value);
+            }
+        }
     }
 
     // L-Connect drives one transmitter and one receiver - the first of each it finds - and so does
@@ -1149,7 +1174,9 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
             transport = _enumerator.Open(info);
             IFanDevice controller;
             if (kind == DeviceKind.Galahad2) {
-                controller = new Galahad2Controller(index, transport, info.ProductId, _clock, _log);
+                // A Vision LCD takes SpaceDeck's screen frames through its handoff, which outlives it.
+                CoolerHandoff? handoff = Galahad2Protocol.HasScreen(info.ProductId) ? _runtime.Coolers.For(index) : null;
+                controller = new Galahad2Controller(index, transport, info.ProductId, _clock, _log, handoff);
             } else {
                 var hub = new TlFanController(index, transport, _clock, _log);
                 hub.TopologyChanged += (_, _) => OnSensorsReported(plan, index, hub, "a TL fan answered after the scan");
@@ -1329,8 +1356,20 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
     // and costs only the readings, never the sensors FanControl was just given.
     private void StartPublishing(IPluginSensorsContainer container) {
         SpaceDeckPublisher? started = null;
+        SpaceDeckScreenClient? screens = null;
         try {
-            started = _publication?.Start(Name, _instance, container);
+            if (_publication is SpaceDeckPublication publication) {
+                var handoffs = new Dictionary<string, CoolerHandoff>(StringComparer.Ordinal);
+                foreach (KeyValuePair<int, IFanDevice> cooler in ScreenCoolers()) {
+                    handoffs["LianLi/" + cooler.Key.ToString(CultureInfo.InvariantCulture)] = _runtime.Coolers.For(cooler.Key);
+                }
+
+                // A screen is only shown for a cooler whose readings, and so whose catalog entry, are sent.
+                started = publication.Start(Name, _instance, container, handoffs.Keys);
+                if (started != null) {
+                    screens = publication.StartScreens(handoffs);
+                }
+            }
         }
 #pragma warning disable CA1031 // opt-in feature: readings for SpaceDeck that cannot be prepared are not sent, and fan control is untouched
         catch (Exception ex) {
@@ -1339,10 +1378,15 @@ public sealed class LianLiPlugin : IPlugin3, IDisposable {
         }
 
         Interlocked.Exchange(ref _publisher, started)?.Dispose();
+        Interlocked.Exchange(ref _screenClient, screens)?.Dispose();
     }
 
-    // SpaceDeck's build: the publisher this object started, stopped by Initialize and Close.
-    private void StopPublishing() => Interlocked.Exchange(ref _publisher, null)?.Dispose();
+    // SpaceDeck's build: the publisher and the screen client this object started, stopped by
+    // Initialize and Close.
+    private void StopPublishing() {
+        Interlocked.Exchange(ref _publisher, null)?.Dispose();
+        Interlocked.Exchange(ref _screenClient, null)?.Dispose();
+    }
 
     // SpaceDeck's build: capture the readings' values on FanControl's own thread, as it updates the
     // sensors, for the publisher to send; a reference swap, nothing that waits. One that fails stops

@@ -85,6 +85,47 @@ the catalog in `Load` and capturing the values in `Update`, in the same spirit a
 creates a new plugin object on every refresh, so each object is one connection with its own `instance` id; the
 collector keeps its catalog across them.
 
+## The GA II LCD's screen
+
+SpaceDeck can show one of its dashboards on a Galahad II Vision LCD's own 480x480 screen (`0x0416:0x7391` and
+`0x7395`). The app draws the frame, the collector passes it on, and this build sends it to the cooler, because the
+plugin is the only program that opens the cooler. Only pictures: nothing on the screen pipe is a fan, pump or
+lighting command, and the plugin builds every USB packet itself; the only bytes from the pipe that reach the cooler
+are a JPEG's.
+
+- **The catalog.** The cooler's hardware entry in the `catalog` line carries
+  `"screen":{"width":480,"height":480,"format":"jpeg"}`, so SpaceDeck's Settings can list it under "Cooler screens".
+  No other device has one.
+- **Where.** The local pipe `\\.\pipe\SpaceDeck.Screen`, hosted by the collector's service, in the binary framing of
+  SpaceDeck's `docs/SCREEN-PIPE.md`. The plugin connects from a thread of its own (`SpaceDeckScreenClient`) as a
+  read-only client at the identification level, checks that the server is the `SpaceDeckCollector` service's process
+  before reading anything, and connects with the publisher's timing (250 ms, then a gap doubling from one second to
+  thirty). Nothing is ever written to it. It starts only when the readings are sent and a Vision LCD is registered,
+  and it has the publisher's off switch: no `SpaceDeckCollector` service, one log line, nothing more.
+- **What is checked.** Every message (`SpaceDeckScreenDecoder`): the `SDSF` magic, version 1, kind 1, an id of 1 to
+  128 characters by the catalog's id rule, a payload of 1 byte to 256 KiB that starts `FF D8` and ends `FF D9`, and no
+  more than 4 messages a second on average (a burst of 8). A message that breaks a rule drops the connection; a frame
+  for a device without a screen is ignored. Each kind of failure is logged once per plugin object.
+- **How a frame reaches the screen.** The client puts the frame in the cooler's slot (`CoolerHandoff`, one per cooler
+  for the life of the process): a newer frame replaces the one waiting, nothing queues, and one that has waited five
+  seconds is dropped. Handing it over wakes that cooler's loop alone, which sends it after the duties and before the
+  status poll, as 0x0E SendJpeg in 1024-byte B packets of 1013 payload bytes each (`Galahad2ScreenEncoder`), at most
+  two frames a second, and never twice. Since a frame wakes the loop, the cooler's status is asked for at most every
+  half second however often it is woken. The cooler answers the last packet with an echo, which nothing reads: every
+  write the transport makes first discards the input queued for the handle, so the next write drops an echo that has
+  arrived, and the status poll reads past one that arrives later (it takes only a reply that echoes 0x81). Reading the
+  echo would cost the loop a read timeout whenever the cooler sends none. A frame is never the write that reopens a
+  cooler that is off the bus: it waits (and expires) instead.
+- **Failsafe.** The cooler shows its own screen again about 20 seconds after the last frame, so when SpaceDeck stops
+  drawing - or FanControl, the plugin or the collector stops - the screen goes back by itself; nothing is undone. A
+  frame write that fails costs only that frame (the next complete one puts the screen right) and is logged once until
+  one is sent again; it never touches the duties or the status poll. Commands that could change the cooler for good
+  (0x0F upload, 0x8E reset, 0x0D streaming, 0x0C test mode) are never sent.
+
+In the code: the reading thread is another thread the plugin starts itself, and the frame write is guarded in
+`Galahad2Controller` like the opt-in lighting path, a failure costing only the frame. The read-only pipe connection is
+the `WindowsNamedPipeApi` adapter's, behind `INamedPipeApi.TryConnectForReading`.
+
 ## Building
 
 The `SpaceDeck build` workflow (`.github/workflows/spacedeck.yaml`) runs on every push to `spacedeck`: format check,

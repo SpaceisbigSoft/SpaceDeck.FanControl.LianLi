@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
+using FanControl.LianLi.Devices;
 using FanControl.LianLi.Logging;
 using FanControl.LianLi.Transport;
 using FanControl.Plugins;
@@ -7,7 +9,8 @@ using FanControl.Plugins;
 namespace FanControl.LianLi.SpaceDeck;
 
 /// <summary>
-/// Starts a <see cref="SpaceDeckPublisher"/> for what a plugin object registered, with the process's
+/// Starts a <see cref="SpaceDeckPublisher"/> for what a plugin object registered, and a
+/// <see cref="SpaceDeckScreenClient"/> for the coolers' screens it drives, with the process's
 /// pipe, service control, bounded-call and clock dependencies: the machine's own in the host
 /// (<see cref="Machine"/>), fakes in a test.
 /// </summary>
@@ -37,8 +40,15 @@ internal sealed class SpaceDeckPublication {
     /// <paramref name="plugin"/> (its FanControl Name) whose object is <paramref name="instance"/>.
     /// Null when there is no reading to send, in which case nothing is started.
     /// </summary>
-    public SpaceDeckPublisher? Start(string plugin, Guid instance, IPluginSensorsContainer container) {
-        SpaceDeckReadings readings = SpaceDeckReadings.From(container, _log);
+    public SpaceDeckPublisher? Start(string plugin, Guid instance, IPluginSensorsContainer container)
+        => Start(plugin, instance, container, Array.Empty<string>());
+
+    /// <summary>
+    /// Start publishing as <see cref="Start(string, Guid, IPluginSensorsContainer)"/> does, with a
+    /// screen on each device whose id is in <paramref name="screens"/>.
+    /// </summary>
+    public SpaceDeckPublisher? Start(string plugin, Guid instance, IPluginSensorsContainer container, IEnumerable<string> screens) {
+        SpaceDeckReadings readings = SpaceDeckReadings.From(container, screens, _log);
         if (readings.Catalog.Sensors.Count == 0) {
             return null;
         }
@@ -47,6 +57,24 @@ internal sealed class SpaceDeckPublication {
             readings, _pipe, _services, _runner, _clock, _log, plugin, VersionOf(typeof(SpaceDeckPublication).Assembly), instance);
         publisher.Start();
         return publisher;
+    }
+
+    /// <summary>
+    /// Start reading the collector's screen frames for <paramref name="screens"/>, each hardware id's
+    /// cooler handoff. Null when there is no screen, in which case nothing is started.
+    /// </summary>
+    public SpaceDeckScreenClient? StartScreens(IReadOnlyDictionary<string, CoolerHandoff> screens) {
+        if (screens is null) {
+            throw new ArgumentNullException(nameof(screens));
+        }
+
+        if (screens.Count == 0) {
+            return null;
+        }
+
+        var client = new SpaceDeckScreenClient(screens, _pipe, _services, _clock, _log);
+        client.Start();
+        return client;
     }
 
     /// <summary>The informational version <paramref name="assembly"/> was built with, or <c>unknown</c>.</summary>
