@@ -68,9 +68,7 @@ internal sealed class FakeLoopbackConnection : ILoopbackConnection {
                     return taken;
                 }
 
-                if (_disposed) {
-                    throw new ObjectDisposedException(nameof(FakeLoopbackConnection));
-                }
+                ObjectDisposedException.ThrowIf(_disposed, this);
 
                 if (!BlockWhenEmpty) {
                     return 0;

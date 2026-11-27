@@ -37,9 +37,7 @@ internal sealed class FakeLoopbackListener : ILoopbackListener {
                     throw AcceptFails;
                 }
 
-                if (_disposed) {
-                    throw new ObjectDisposedException(nameof(FakeLoopbackListener));
-                }
+                ObjectDisposedException.ThrowIf(_disposed, this);
 
                 if (_pending.Count > 0) {
                     return _pending.Dequeue();
